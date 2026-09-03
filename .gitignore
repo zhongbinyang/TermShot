@@ -1,0 +1,23 @@
+# Build
+[Bb]in/
+[Oo]bj/
+dist/
+*.user
+*.suo
+*.cache
+
+# IDE / local
+.vs/
+.idea/
+.vscode/
+.cursor/
+*.DotSettings.user
+
+# Logs and machine-local data
+logs/
+*.log
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store

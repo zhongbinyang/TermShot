@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon Condition="Exists('Assets\app.ico')">Assets\app.ico</ApplicationIcon>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <AssemblyName>TermShot</AssemblyName>
+    <RootNamespace>TermShot</RootNamespace>
+    <Product>TermShot</Product>
+    <AssemblyTitle>终端截图</AssemblyTitle>
+    <Description>托盘常驻截图，框选存 PNG，路径写入剪贴板供终端粘贴</Description>
+    <Version>1.0.0</Version>
+    <Authors>TermShot</Authors>
+    <NeutralLanguage>zh-CN</NeutralLanguage>
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <ForceDesignerDpiUnaware>true</ForceDesignerDpiUnaware>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Update="Assets\app.ico" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>
