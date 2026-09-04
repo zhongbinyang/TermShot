@@ -164,6 +164,16 @@ internal sealed class OverlayForm : Form
                 Choose(PostCaptureAction.CopyPath);
                 return true;
             }
+            if (key == Keys.O)
+            {
+                Choose(PostCaptureAction.CopyText);
+                return true;
+            }
+            if (key == Keys.L)
+            {
+                Choose(PostCaptureAction.Translate);
+                return true;
+            }
             return true;
         }
         if (key == Keys.Enter)

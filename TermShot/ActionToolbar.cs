@@ -4,7 +4,7 @@ namespace TermShot;
 
 internal sealed class ActionToolbar
 {
-    public const int MaxCount = 8;
+    public const int MaxCount = 10;
 
     private readonly Rectangle[] _buttons = new Rectangle[MaxCount];
     private readonly Rectangle[] _swatches = new Rectangle[AnnotationSession.Colors.Length];
@@ -20,7 +20,7 @@ internal sealed class ActionToolbar
     public bool ShowScroll { get; set; }
     public int ColorIndex { get; set; }
     public int WidthIndex { get; set; } = 1;
-    public int VisibleCount => ShowScroll ? 8 : 7;
+    public int VisibleCount => ShowScroll ? 10 : 9;
 
     public void Relayout(Rectangle selection, Rectangle confine, float scale)
     {
@@ -147,7 +147,9 @@ internal sealed class ActionToolbar
             4 => ToolbarResult.Save,
             5 => ToolbarResult.CopyImage,
             6 => ToolbarResult.CopyPath,
-            7 => ToolbarResult.Close,
+            7 => ToolbarResult.CopyText,
+            8 => ToolbarResult.Translate,
+            9 => ToolbarResult.Close,
             _ => ToolbarResult.Miss
         };
     }
@@ -160,7 +162,9 @@ internal sealed class ActionToolbar
         3 => ToolbarResult.Save,
         4 => ToolbarResult.CopyImage,
         5 => ToolbarResult.CopyPath,
-        6 => ToolbarResult.Close,
+        6 => ToolbarResult.CopyText,
+        7 => ToolbarResult.Translate,
+        8 => ToolbarResult.Close,
         _ => ToolbarResult.Miss
     };
 
@@ -170,6 +174,8 @@ internal sealed class ActionToolbar
         ToolbarResult.Save => PostCaptureAction.SaveImage,
         ToolbarResult.CopyImage => PostCaptureAction.CopyImage,
         ToolbarResult.CopyPath => PostCaptureAction.CopyPath,
+        ToolbarResult.CopyText => PostCaptureAction.CopyText,
+        ToolbarResult.Translate => PostCaptureAction.Translate,
         _ => null
     };
 
@@ -199,7 +205,9 @@ internal sealed class ActionToolbar
                 4 => "保存图片  ·  S",
                 5 => "复制图片  ·  C",
                 6 => "复制图片地址  ·  P",
-                7 => "取消  ·  Esc",
+                7 => "复制文字  ·  O",
+                8 => "翻译  ·  L",
+                9 => "取消  ·  Esc",
                 _ => ""
             };
         }
@@ -211,7 +219,9 @@ internal sealed class ActionToolbar
             3 => "保存图片  ·  S",
             4 => "复制图片  ·  C",
             5 => "复制图片地址  ·  P",
-            6 => "取消  ·  Esc",
+            6 => "复制文字  ·  O",
+            7 => "翻译  ·  L",
+            8 => "取消  ·  Esc",
             _ => ""
         };
     }
@@ -375,6 +385,8 @@ internal sealed class ActionToolbar
             case ToolbarResult.Save: DrawSave(g, icon, pen); break;
             case ToolbarResult.CopyImage: DrawCopy(g, icon, pen); break;
             case ToolbarResult.CopyPath: DrawPath(g, icon, pen); break;
+            case ToolbarResult.CopyText: DrawText(g, icon, pen); break;
+            case ToolbarResult.Translate: DrawTranslate(g, icon, pen, color); break;
             default: DrawClose(g, icon, pen); break;
         }
     }
@@ -489,6 +501,31 @@ internal sealed class ActionToolbar
         float y2 = page.Y + r.Height * 0.70f;
         g.DrawLine(pen, page.X + r.Width * 0.18f, y1, page.Right - r.Width * 0.18f, y1);
         g.DrawLine(pen, page.X + r.Width * 0.18f, y2, page.X + r.Width * 0.42f, y2);
+    }
+
+    private static void DrawTranslate(Graphics g, RectangleF r, Pen pen, Color color)
+    {
+        var hint = g.TextRenderingHint;
+        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+        float px = Math.Max(7f, r.Height * 0.48f);
+        using var font = new Font("Segoe UI", px, FontStyle.Bold, GraphicsUnit.Pixel);
+        using var brush = new SolidBrush(color);
+        g.DrawString("A", font, brush, r.X - r.Width * 0.12f, r.Y - r.Height * 0.12f);
+        g.DrawString("文", font, brush, r.X + r.Width * 0.28f, r.Y + r.Height * 0.18f);
+        g.TextRenderingHint = hint;
+        float y = r.Y + r.Height * 0.42f;
+        g.DrawLine(pen, r.X + r.Width * 0.08f, y, r.Right - r.Width * 0.08f, y + r.Height * 0.22f);
+    }
+
+    private static void DrawText(Graphics g, RectangleF r, Pen pen)
+    {
+        var page = new RectangleF(r.X + r.Width * 0.10f, r.Y, r.Width * 0.80f, r.Height);
+        DrawRound(g, pen, page, r.Width * 0.10f);
+        float x1 = page.X + r.Width * 0.16f;
+        float x2 = page.Right - r.Width * 0.16f;
+        g.DrawLine(pen, x1, page.Y + r.Height * 0.28f, x2, page.Y + r.Height * 0.28f);
+        g.DrawLine(pen, x1, page.Y + r.Height * 0.50f, x2, page.Y + r.Height * 0.50f);
+        g.DrawLine(pen, x1, page.Y + r.Height * 0.72f, page.X + r.Width * 0.42f, page.Y + r.Height * 0.72f);
     }
 
     private static void DrawClose(Graphics g, RectangleF r, Pen pen)

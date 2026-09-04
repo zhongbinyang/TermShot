@@ -360,7 +360,7 @@ internal sealed class PastePinForm : Form
             bool failed = false;
             try
             {
-                page = await OcrService.RecognizeAsync(clone, ct).ConfigureAwait(false);
+                page = await OcrService.RecognizeAsync(clone, _settings, ct).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {

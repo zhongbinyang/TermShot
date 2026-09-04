@@ -21,11 +21,11 @@ internal sealed class OcrPage
         FullText = fullText;
     }
 
-    public bool HasText => Glyphs.Count > 0;
+    public bool HasText => Glyphs.Count > 0 || !string.IsNullOrWhiteSpace(FullText);
 
     public string Slice(int from, int to)
     {
-        if (Glyphs.Count == 0) return "";
+        if (Glyphs.Count == 0) return FullText ?? "";
         int a = Math.Clamp(Math.Min(from, to), 0, Glyphs.Count - 1);
         int b = Math.Clamp(Math.Max(from, to), 0, Glyphs.Count - 1);
         var sb = new StringBuilder();
@@ -78,7 +78,96 @@ internal sealed class OcrPage
 
 internal static class OcrService
 {
-    public static async Task<OcrPage?> RecognizeAsync(Bitmap source, CancellationToken ct)
+    public static async Task<OcrPage?> RecognizeAsync(Bitmap source, AppSettings settings, CancellationToken ct)
+    {
+        Bitmap? winBmp = null;
+        Bitmap? ollamaBmp = null;
+        try
+        {
+            winBmp = (Bitmap)source.Clone();
+            var winTask = RecognizeWindowsAsync(winBmp, ct);
+
+            Task<string?> ollamaTask;
+            if (settings.OllamaOcr)
+            {
+                ollamaBmp = (Bitmap)source.Clone();
+                ollamaTask = TranscribeOllamaAsync(ollamaBmp, settings, ct);
+            }
+            else
+            {
+                ollamaTask = Task.FromResult<string?>(null);
+            }
+
+            OcrPage? win = null;
+            try
+            {
+                win = await winTask.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch
+            {
+                win = null;
+            }
+
+            string? ollama = null;
+            try
+            {
+                ollama = OllamaClient.CleanText(await ollamaTask.ConfigureAwait(false), "text");
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch
+            {
+                ollama = null;
+            }
+
+            if (!string.IsNullOrWhiteSpace(ollama))
+            {
+                IReadOnlyList<OcrGlyph> glyphs = win is { HasText: true }
+                    ? win.Glyphs
+                    : [new OcrGlyph(0, 0, ollama, new RectangleF(0, 0, source.Width, source.Height))];
+                return new OcrPage(glyphs, ollama);
+            }
+
+            return win;
+        }
+        finally
+        {
+            winBmp?.Dispose();
+            ollamaBmp?.Dispose();
+        }
+    }
+
+    public static bool EngineAvailable() => CreateEngine() != null;
+
+    private const string OcrSystemInstruction =
+        "You are an accurate OCR transcription engine. " +
+        "Transcribe all visible text from the image faithfully.\n" +
+        "Strict rules:\n" +
+        "1. Output ONLY the transcribed text without commentary, conversational filler, or markdown fences.\n" +
+        "2. For prose paragraphs: merge lines that wrap naturally within the same sentence or paragraph, avoiding artificial line breaks caused by column/window margins.\n" +
+        "3. Preserve paragraph breaks with an empty line.\n" +
+        "4. For code, terminal commands, bullet points (- or *), numbered lists, table rows, and titles: strictly preserve each line separately.\n" +
+        "5. Join words hyphenated across lines (e.g. 'con-\\ntinue' -> 'continue').";
+
+    private static Task<string?> TranscribeOllamaAsync(Bitmap source, AppSettings settings, CancellationToken ct) =>
+        OllamaClient.GenerateVisionAsync(source, settings,
+            "Transcribe all visible text in this image accurately.\n" +
+            "Formatting and Line Break Rules:\n" +
+            "- Merge soft-wrapped lines within the same paragraph into a continuous sentence; do NOT insert artificial line breaks caused only by page or window margins.\n" +
+            "- Use an empty line between distinct paragraphs.\n" +
+            "- Strictly preserve separate lines for code, terminal commands, bullet points (- or *), and numbered lists.\n" +
+            "- Join hyphenated words across lines into single words.\n" +
+            "- Output only the transcribed text.",
+            ct,
+            OcrSystemInstruction);
+
+    private static async Task<OcrPage?> RecognizeWindowsAsync(Bitmap source, CancellationToken ct)
     {
         var engine = CreateEngine();
         if (engine is null)
@@ -111,10 +200,11 @@ internal static class OcrService
             lineIndex++;
         }
 
-        return new OcrPage(glyphs, result.Text?.Trim() ?? "");
+        var full = result.Text?.Trim() ?? "";
+        if (glyphs.Count == 0 && string.IsNullOrWhiteSpace(full))
+            return null;
+        return new OcrPage(glyphs, full);
     }
-
-    public static bool EngineAvailable() => CreateEngine() != null;
 
     private static OcrEngine? CreateEngine()
     {

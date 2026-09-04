@@ -173,6 +173,8 @@ internal enum ToolbarResult
     Save,
     CopyImage,
     CopyPath,
+    CopyText,
+    Translate,
     Close,
     Color,
     Width

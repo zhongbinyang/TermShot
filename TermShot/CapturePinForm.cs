@@ -74,7 +74,7 @@ internal sealed class CapturePinForm : Form
         int imgW = Math.Max(1, (int)Math.Round(_bmp.Width * fit));
         int imgH = Math.Max(1, (int)Math.Round(_bmp.Height * fit));
 
-        int toolW = (int)Math.Round(320 * _scale);
+        int toolW = (int)Math.Round(420 * _scale);
         int formW = Math.Max(imgW, toolW);
         bool outside = screenRect.Y + imgH + gap + toolH <= working.Bottom - margin;
         int formH = outside ? imgH + gap + toolH : imgH;
@@ -255,6 +255,10 @@ internal sealed class CapturePinForm : Form
             Choose(PostCaptureAction.CopyImage);
         else if (e.KeyCode == Keys.P)
             Choose(PostCaptureAction.CopyPath);
+        else if (e.KeyCode == Keys.O)
+            Choose(PostCaptureAction.CopyText);
+        else if (e.KeyCode == Keys.L)
+            Choose(PostCaptureAction.Translate);
     }
 
     private Cursor CursorFor(Point client)

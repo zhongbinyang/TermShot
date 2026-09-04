@@ -23,8 +23,6 @@ internal sealed class TrayContext : ApplicationContext
             ShowImageMargin = false
         };
         menu.Items.Add(Item("截图", () => Queue(StartRegionCapture)));
-        menu.Items.Add(Item("滚动截图", () => Queue(StartScrollCapture)));
-        menu.Items.Add(Item("全屏截图", () => Queue(StartMonitorCapture)));
         _closePinsItem = Item("关闭全部贴图", CloseAllPins);
         menu.Items.Add(_closePinsItem);
         menu.Items.Add(new ToolStripSeparator());
@@ -94,17 +92,9 @@ internal sealed class TrayContext : ApplicationContext
         NativeMethods.ApplyCursor(Cursors.Cross);
     }
 
-    private void OnHotkey()
-    {
-        if (_settings.RegionSelect)
-            StartRegionCapture();
-        else
-            StartMonitorCapture();
-    }
+    private void OnHotkey() => StartRegionCapture();
 
     public void StartRegionCapture() => _ = CaptureRegionAsync(scrollAfterSelect: false);
-
-    public void StartScrollCapture() => _ = CaptureRegionAsync(scrollAfterSelect: true);
 
     private async Task CaptureRegionAsync(bool scrollAfterSelect)
     {
@@ -222,28 +212,6 @@ internal sealed class TrayContext : ApplicationContext
         }
     }
 
-    public void StartMonitorCapture()
-    {
-        if (_busy) return;
-        _busy = true;
-        try
-        {
-            ReadyCrosshair();
-            DismissTrayChrome();
-            var bounds = WindowEnumerator.MonitorFromPoint(Cursor.Position);
-            using var shot = CaptureService.CaptureRect(bounds);
-            Finish(shot, bounds);
-        }
-        catch (Exception ex)
-        {
-            Balloon("截图失败", ex.Message);
-        }
-        finally
-        {
-            _busy = false;
-        }
-    }
-
     private void DismissTrayChrome()
     {
         if (_tray.ContextMenuStrip is { Visible: true } menu)
@@ -276,6 +244,12 @@ internal sealed class TrayContext : ApplicationContext
             case PostCaptureAction.Pin:
                 PinBitmap(bmp, screenRect.Location);
                 break;
+            case PostCaptureAction.CopyText:
+                CopyText(bmp);
+                break;
+            case PostCaptureAction.Translate:
+                Translate(bmp);
+                break;
             default:
                 SaveAndCopyPath(bmp);
                 break;
@@ -298,6 +272,103 @@ internal sealed class TrayContext : ApplicationContext
             Balloon("复制图片失败", "剪贴板正被占用，请再截一次");
         else
             Balloon("已复制图片", "可直接粘贴到聊天或文档");
+    }
+
+    private void CopyText(Bitmap bmp)
+    {
+        var clone = new Bitmap(bmp);
+        var settings = _settings;
+        var ui = SynchronizationContext.Current;
+        Balloon("正在识别文字", settings.OllamaOcr
+            ? "Ollama · " + OllamaClient.ModelName(settings)
+            : "系统 OCR");
+
+        _ = Task.Run(async () =>
+        {
+            string? text = null;
+            string? error = null;
+            try
+            {
+                var page = await OcrService.RecognizeAsync(clone, settings, CancellationToken.None)
+                    .ConfigureAwait(false);
+                text = page?.FullText?.Trim();
+                if (string.IsNullOrWhiteSpace(text) && page is { HasText: true })
+                    text = page.Slice(0, page.Glyphs.Count - 1).Trim();
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+            }
+            finally
+            {
+                clone.Dispose();
+            }
+
+            void Done()
+            {
+                if (error != null)
+                    Balloon("识别失败", error);
+                else if (string.IsNullOrWhiteSpace(text))
+                    Balloon("未识别到文字", settings.OllamaOcr
+                        ? "确认 ollama serve 已在 " + OllamaClient.NormalizeHost(settings.OllamaHost) + " 运行"
+                        : "系统 OCR 没有读到字");
+                else if (!CaptureService.TrySetClipboardText(text))
+                    Balloon("复制文字失败", "剪贴板正被占用，请再试一次");
+                else
+                    Balloon("已复制文字", text);
+            }
+
+            if (ui != null)
+                ui.Post(_ => Done(), null);
+            else
+                Done();
+        });
+    }
+
+    private void Translate(Bitmap bmp)
+    {
+        var clone = new Bitmap(bmp);
+        var settings = _settings;
+        var ui = SynchronizationContext.Current;
+        Balloon("正在翻译", "Ollama · " + OllamaClient.ModelName(settings)
+            + " · " + TranslateService.TargetLabel(settings.TranslateTarget));
+
+        _ = Task.Run(async () =>
+        {
+            string? text = null;
+            string? error = null;
+            try
+            {
+                text = await TranslateService.TranslateAsync(clone, settings, CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+            }
+            finally
+            {
+                clone.Dispose();
+            }
+
+            void Done()
+            {
+                if (error != null)
+                    Balloon("翻译失败", error);
+                else if (string.IsNullOrWhiteSpace(text))
+                    Balloon("没有译出文字", "确认 ollama serve 已在 "
+                        + OllamaClient.NormalizeHost(settings.OllamaHost) + " 运行");
+                else if (!CaptureService.TrySetClipboardText(text))
+                    Balloon("复制译文失败", "剪贴板正被占用，请再试一次");
+                else
+                    Balloon("已复制译文", text);
+            }
+
+            if (ui != null)
+                ui.Post(_ => Done(), null);
+            else
+                Done();
+        });
     }
 
     private void PinBitmap(Bitmap bmp, Point screenLocation)
@@ -398,8 +469,15 @@ internal sealed class TrayContext : ApplicationContext
 
     private void Balloon(string title, string text)
     {
-        try { _tray.ShowBalloonTip(1600, title, text, ToolTipIcon.None); }
-        catch { }
+        try
+        {
+            Toast.Show(title, text);
+        }
+        catch
+        {
+            try { _tray.ShowBalloonTip(1600, title, text, ToolTipIcon.None); }
+            catch { }
+        }
     }
 
     private static ToolStripMenuItem Item(string text, Action action)
@@ -430,6 +508,7 @@ internal sealed class TrayContext : ApplicationContext
     {
         if (disposing)
         {
+            Toast.Close();
             CloseAllPins();
             _hotkey.Dispose();
             _tray.Dispose();
