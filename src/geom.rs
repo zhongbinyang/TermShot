@@ -62,6 +62,20 @@ impl Rect {
         Self::from_ltrb(l, t, r, b)
     }
 
+    pub fn union(self, o: Self) -> Self {
+        if self.is_empty() {
+            return o;
+        }
+        if o.is_empty() {
+            return self;
+        }
+        let l = self.x.min(o.x);
+        let t = self.y.min(o.y);
+        let r = self.right().max(o.right());
+        let b = self.bottom().max(o.bottom());
+        Self::from_ltrb(l, t, r, b)
+    }
+
     pub fn center(self) -> Point {
         Point::new(self.x + self.w / 2, self.y + self.h / 2)
     }
@@ -116,6 +130,9 @@ mod tests {
 
         let inflated = r1.inflate(5, 10);
         assert_eq!(inflated, Rect::new(5, 10, 110, 100));
+
+        let union_rect = r1.union(r2);
+        assert_eq!(union_rect, Rect::new(10, 20, 140, 140));
     }
 
     #[test]

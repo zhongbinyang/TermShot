@@ -368,124 +368,24 @@ impl ActionToolbar {
             theme::TEXT
         };
         let icon = icon_box(r);
-        let sw = (1.6 * scale).max(1.2);
+        let sw = (1.5 * scale).max(1.2);
         match kind {
-            ToolbarResult::Shape => {
-                if self.shape_kind == AnnotKind::Ellipse {
-                    stroke_ellipse(dest, icon.x as f32, icon.y as f32, icon.w as f32, icon.h as f32, color, sw);
-                } else {
-                    stroke_rect(dest, icon.x as f32, icon.y as f32, icon.w as f32, icon.h as f32, color, sw);
-                }
-            }
-            ToolbarResult::Stroke => {
-                if self.stroke_kind == AnnotKind::Line {
-                    stroke_line(
-                        dest,
-                        icon.x as f32,
-                        icon.bottom() as f32,
-                        icon.right() as f32,
-                        icon.y as f32,
-                        color,
-                        sw,
-                    );
-                } else {
-                    paint_arrow(
-                        dest,
-                        Point::new(icon.x, icon.bottom()),
-                        Point::new(icon.right(), icon.y),
-                        color,
-                        sw,
-                    );
-                }
-            }
-            ToolbarResult::Pencil => {
-                stroke_line(
-                    dest,
-                    icon.x as f32 + 2.0,
-                    icon.bottom() as f32 - 2.0,
-                    icon.right() as f32 - 2.0,
-                    icon.y as f32 + 2.0,
-                    color,
-                    sw,
-                );
-            }
-            ToolbarResult::Marker => {
-                stroke_line(
-                    dest,
-                    icon.x as f32,
-                    icon.bottom() as f32 - 4.0,
-                    icon.right() as f32,
-                    icon.y as f32 + 4.0,
-                    color.with_alpha(160),
-                    4.0 * scale,
-                );
-            }
-            ToolbarResult::Mosaic => {
-                let s = icon.w / 2;
-                fill_rect(dest, icon.x, icon.y, s, s, color);
-                fill_rect(dest, icon.x + s, icon.y + s, s, s, color.with_alpha(180));
-            }
-            ToolbarResult::AnnotText => {
-                crate::draw::draw_text(dest, Point::new(icon.x, icon.y - 2), "T", color, icon.h.max(10));
-            }
-            ToolbarResult::Eraser => {
-                stroke_rect(dest, icon.x as f32 + 1.0, icon.y as f32 + 4.0, icon.w as f32 - 2.0, icon.h as f32 - 6.0, color, sw);
-            }
-            ToolbarResult::Undo => {
-                stroke_ellipse(dest, icon.x as f32, icon.y as f32 + 2.0, icon.w as f32, icon.h as f32 - 2.0, color, sw);
-            }
-            ToolbarResult::Scroll => {
-                stroke_line(dest, icon.x as f32, icon.y as f32 + 2.0, icon.right() as f32, icon.y as f32 + 2.0, color, 1.5);
-                stroke_line(
-                    dest,
-                    icon.x as f32 + icon.w as f32 / 2.0,
-                    icon.y as f32 + 6.0,
-                    icon.x as f32 + icon.w as f32 / 2.0,
-                    icon.bottom() as f32,
-                    color,
-                    1.5,
-                );
-            }
-            ToolbarResult::Pin => {
-                stroke_rect(dest, icon.x as f32, icon.y as f32 + 3.0, icon.w as f32, icon.h as f32 - 4.0, color, 1.5);
-            }
-            ToolbarResult::Save => {
-                stroke_line(
-                    dest,
-                    icon.x as f32 + icon.w as f32 / 2.0,
-                    icon.y as f32,
-                    icon.x as f32 + icon.w as f32 / 2.0,
-                    icon.y as f32 + icon.h as f32 * 0.5,
-                    color,
-                    1.6,
-                );
-            }
-            ToolbarResult::CopyImage => {
-                stroke_rect(dest, icon.x as f32, icon.y as f32, icon.w as f32 * 0.7, icon.h as f32 * 0.7, color, 1.5);
-                stroke_rect(
-                    dest,
-                    icon.x as f32 + icon.w as f32 * 0.3,
-                    icon.y as f32 + icon.h as f32 * 0.3,
-                    icon.w as f32 * 0.7,
-                    icon.h as f32 * 0.7,
-                    color,
-                    1.5,
-                );
-            }
-            ToolbarResult::CopyPath => {
-                stroke_rect(dest, icon.x as f32 + 2.0, icon.y as f32, icon.w as f32 - 4.0, icon.h as f32, color, 1.5);
-            }
-            ToolbarResult::CopyText => {
-                stroke_rect(dest, icon.x as f32 + 1.0, icon.y as f32, icon.w as f32 - 2.0, icon.h as f32, color, 1.5);
-                stroke_line(dest, icon.x as f32 + 4.0, icon.y as f32 + 5.0, icon.right() as f32 - 4.0, icon.y as f32 + 5.0, color, 1.2);
-            }
-            ToolbarResult::Translate => {
-                crate::draw::draw_text(dest, Point::new(icon.x - 2, icon.y), "A", color, (icon.h as f32 * 0.45) as i32);
-            }
-            _ => {
-                stroke_line(dest, icon.x as f32, icon.y as f32, icon.right() as f32, icon.bottom() as f32, color, 1.8);
-                stroke_line(dest, icon.right() as f32, icon.y as f32, icon.x as f32, icon.bottom() as f32, color, 1.8);
-            }
+            ToolbarResult::Shape => draw_icon_shape(dest, icon, self.shape_kind, color, sw),
+            ToolbarResult::Stroke => draw_icon_stroke(dest, icon, self.stroke_kind, color, sw),
+            ToolbarResult::Pencil => draw_icon_pencil(dest, icon, color, sw),
+            ToolbarResult::Marker => draw_icon_marker(dest, icon, color, scale),
+            ToolbarResult::Mosaic => draw_icon_mosaic(dest, icon, color),
+            ToolbarResult::AnnotText => draw_icon_text(dest, icon, color, sw),
+            ToolbarResult::Eraser => draw_icon_eraser(dest, icon, color, sw),
+            ToolbarResult::Undo => draw_icon_undo(dest, icon, color, sw),
+            ToolbarResult::Scroll => draw_icon_scroll(dest, icon, color, sw),
+            ToolbarResult::Pin => draw_icon_pin(dest, icon, color, sw),
+            ToolbarResult::Save => draw_icon_save(dest, icon, color, sw),
+            ToolbarResult::CopyImage => draw_icon_copy_image(dest, icon, color, sw),
+            ToolbarResult::CopyPath => draw_icon_copy_path(dest, icon, color, sw),
+            ToolbarResult::CopyText => draw_icon_copy_text(dest, icon, color, sw),
+            ToolbarResult::Translate => draw_icon_translate(dest, icon, color, scale),
+            _ => draw_icon_close(dest, icon, color, sw),
         }
     }
 
@@ -607,8 +507,364 @@ impl ActionToolbar {
 }
 
 fn icon_box(btn: Rect) -> Rect {
-    let s = (btn.w.min(btn.h) as f32 * 0.46) as i32;
+    let s = (btn.w.min(btn.h) as f32 * 0.52).round() as i32;
     Rect::new(btn.x + (btn.w - s) / 2, btn.y + (btn.h - s) / 2, s, s)
+}
+
+fn draw_icon_shape(
+    dest: &mut crate::bitmap::Bitmap,
+    icon: Rect,
+    shape_kind: AnnotKind,
+    color: Color,
+    sw: f32,
+) {
+    let m = 1.0;
+    let x = icon.x as f32 + m;
+    let y = icon.y as f32 + m;
+    let w = (icon.w as f32 - m * 2.0).max(2.0);
+    let h = (icon.h as f32 - m * 2.0).max(2.0);
+    if shape_kind == AnnotKind::Ellipse {
+        stroke_ellipse(dest, x, y, w, h, color, sw);
+    } else {
+        stroke_rect(dest, x, y, w, h, color, sw);
+    }
+}
+
+fn draw_icon_stroke(
+    dest: &mut crate::bitmap::Bitmap,
+    icon: Rect,
+    stroke_kind: AnnotKind,
+    color: Color,
+    sw: f32,
+) {
+    let m = 2.0;
+    let p1 = Point::new(icon.x + m as i32, icon.bottom() - m as i32);
+    let p2 = Point::new(icon.right() - m as i32, icon.y + m as i32);
+    if stroke_kind == AnnotKind::Line {
+        stroke_line(dest, p1.x as f32, p1.y as f32, p2.x as f32, p2.y as f32, color, sw);
+    } else {
+        paint_arrow(dest, p1, p2, color, sw);
+    }
+}
+
+fn draw_icon_pencil(dest: &mut crate::bitmap::Bitmap, icon: Rect, color: Color, sw: f32) {
+    let tip = Point::new(icon.x + 2, icon.bottom() - 2);
+    let cap = Point::new(icon.right() - 2, icon.y + 2);
+    let dx = (cap.x - tip.x) as f32;
+    let dy = (cap.y - tip.y) as f32;
+    let len = (dx * dx + dy * dy).sqrt();
+    if len < 4.0 {
+        stroke_line(dest, tip.x as f32, tip.y as f32, cap.x as f32, cap.y as f32, color, sw);
+        return;
+    }
+    let nx = -dy / len * 2.2;
+    let ny = dx / len * 2.2;
+    let b1_x = tip.x as f32 + dx * 0.28 + nx;
+    let b1_y = tip.y as f32 + dy * 0.28 + ny;
+    let b2_x = tip.x as f32 + dx * 0.28 - nx;
+    let b2_y = tip.y as f32 + dy * 0.28 - ny;
+    let c1_x = cap.x as f32 + nx;
+    let c1_y = cap.y as f32 + ny;
+    let c2_x = cap.x as f32 - nx;
+    let c2_y = cap.y as f32 - ny;
+    stroke_line(dest, tip.x as f32, tip.y as f32, b1_x, b1_y, color, sw.min(1.4));
+    stroke_line(dest, tip.x as f32, tip.y as f32, b2_x, b2_y, color, sw.min(1.4));
+    fill_circle(dest, tip.x as f32, tip.y as f32, 1.2, color);
+    stroke_line(dest, b1_x, b1_y, c1_x, c1_y, color, sw.min(1.4));
+    stroke_line(dest, b2_x, b2_y, c2_x, c2_y, color, sw.min(1.4));
+    stroke_line(dest, c1_x, c1_y, c2_x, c2_y, color, sw.min(1.4));
+}
+
+fn draw_icon_marker(dest: &mut crate::bitmap::Bitmap, icon: Rect, color: Color, scale: f32) {
+    let sw = (3.2 * scale).max(2.4);
+    let p1 = Point::new(icon.x + 3, icon.bottom() - 5);
+    let p2 = Point::new(icon.right() - 4, icon.y + 3);
+    stroke_line(dest, p1.x as f32, p1.y as f32, p2.x as f32, p2.y as f32, color, sw);
+    let mark_y = icon.bottom() as f32 - 2.5;
+    stroke_line(
+        dest,
+        icon.x as f32 + 1.0,
+        mark_y,
+        icon.right() as f32 - 1.0,
+        mark_y,
+        color.with_alpha(150),
+        (2.8 * scale).max(2.0),
+    );
+}
+
+fn draw_icon_mosaic(dest: &mut crate::bitmap::Bitmap, icon: Rect, color: Color) {
+    let size = (icon.w.min(icon.h) / 3).max(2);
+    let start_x = icon.x + (icon.w - size * 3) / 2;
+    let start_y = icon.y + (icon.h - size * 3) / 2;
+    for row in 0..3 {
+        for col in 0..3 {
+            let cx = start_x + col * size;
+            let cy = start_y + row * size;
+            let pad = 1;
+            let c = if (row + col) % 2 == 0 {
+                color
+            } else {
+                color.with_alpha(75)
+            };
+            fill_rect(dest, cx, cy, (size - pad).max(1), (size - pad).max(1), c);
+        }
+    }
+}
+
+fn draw_icon_text(dest: &mut crate::bitmap::Bitmap, icon: Rect, color: Color, sw: f32) {
+    let x = icon.x as f32 + 2.0;
+    let y = icon.y as f32 + 2.0;
+    let w = (icon.w as f32 - 4.0).max(4.0);
+    let h = (icon.h as f32 - 4.0).max(4.0);
+    let cx = x + w * 0.5;
+    let top_w = (sw + 0.4).max(1.5);
+    stroke_line(dest, x, y, x + w, y, color, top_w);
+    stroke_line(dest, x, y, x, y + 2.0, color, top_w);
+    stroke_line(dest, x + w, y, x + w, y + 2.0, color, top_w);
+    stroke_line(dest, cx, y, cx, y + h, color, top_w);
+    stroke_line(dest, cx - 2.5, y + h, cx + 2.5, y + h, color, top_w);
+}
+
+fn draw_icon_eraser(dest: &mut crate::bitmap::Bitmap, icon: Rect, color: Color, sw: f32) {
+    let x = icon.x as f32 + 2.0;
+    let y = icon.y as f32 + 4.0;
+    let w = (icon.w as f32 - 4.0).max(6.0);
+    let h = (icon.h as f32 - 8.0).max(4.0);
+    let skew = 3.0f32;
+    let p1 = (x + skew, y);
+    let p2 = (x + w, y);
+    let p3 = (x + w - skew, y + h);
+    let p4 = (x, y + h);
+    stroke_line(dest, p1.0, p1.1, p2.0, p2.1, color, sw);
+    stroke_line(dest, p2.0, p2.1, p3.0, p3.1, color, sw);
+    stroke_line(dest, p3.0, p3.1, p4.0, p4.1, color, sw);
+    stroke_line(dest, p4.0, p4.1, p1.0, p1.1, color, sw);
+    let band_x1 = x + w * 0.45;
+    let band_y1 = y;
+    let band_x2 = x + w * 0.45 - skew;
+    let band_y2 = y + h;
+    stroke_line(dest, band_x1, band_y1, band_x2, band_y2, color.with_alpha(180), sw.min(1.4));
+}
+
+fn draw_icon_undo(dest: &mut crate::bitmap::Bitmap, icon: Rect, color: Color, sw: f32) {
+    let cx = icon.x as f32 + icon.w as f32 * 0.52;
+    let cy = icon.y as f32 + icon.h as f32 * 0.55;
+    let rx = (icon.w as f32 * 0.38).max(3.0);
+    let ry = (icon.h as f32 * 0.38).max(3.0);
+    let steps = 14;
+    let start_angle = std::f32::consts::PI * 0.25;
+    let end_angle = std::f32::consts::PI * 1.25;
+    let mut prev_x = cx + rx * start_angle.cos();
+    let mut prev_y = cy - ry * start_angle.sin();
+    for i in 1..=steps {
+        let t = i as f32 / steps as f32;
+        let angle = start_angle + (end_angle - start_angle) * t;
+        let px = cx + rx * angle.cos();
+        let py = cy - ry * angle.sin();
+        stroke_line(dest, prev_x, prev_y, px, py, color, sw);
+        prev_x = px;
+        prev_y = py;
+    }
+    let tip_x = prev_x;
+    let tip_y = prev_y;
+    stroke_line(dest, tip_x, tip_y, tip_x + 4.5, tip_y - 1.0, color, sw);
+    stroke_line(dest, tip_x, tip_y, tip_x + 2.0, tip_y + 4.5, color, sw);
+}
+
+fn draw_icon_scroll(dest: &mut crate::bitmap::Bitmap, icon: Rect, color: Color, sw: f32) {
+    let x = icon.x as f32 + 3.0;
+    let w = (icon.w as f32 - 6.0).max(6.0);
+    let y = icon.y as f32 + 1.5;
+    let h = (icon.h as f32 - 3.0).max(8.0);
+    stroke_line(dest, x, y, x, y + h, color, sw);
+    stroke_line(dest, x + w, y, x + w, y + h, color, sw);
+    stroke_line(dest, x, y, x + w * 0.3, y, color, sw);
+    stroke_line(dest, x + w * 0.7, y, x + w, y, color, sw);
+    stroke_line(dest, x, y + h, x + w * 0.3, y + h, color, sw);
+    stroke_line(dest, x + w * 0.7, y + h, x + w, y + h, color, sw);
+    let cx = x + w * 0.5;
+    let c1_y = y + h * 0.35;
+    stroke_line(dest, cx - 2.5, c1_y - 2.0, cx, c1_y + 1.0, color, sw);
+    stroke_line(dest, cx + 2.5, c1_y - 2.0, cx, c1_y + 1.0, color, sw);
+    let c2_y = y + h * 0.68;
+    stroke_line(dest, cx - 2.5, c2_y - 2.0, cx, c2_y + 1.0, color, sw);
+    stroke_line(dest, cx + 2.5, c2_y - 2.0, cx, c2_y + 1.0, color, sw);
+}
+
+fn draw_icon_pin(dest: &mut crate::bitmap::Bitmap, icon: Rect, color: Color, sw: f32) {
+    let cx = icon.x as f32 + icon.w as f32 * 0.58;
+    let cy = icon.y as f32 + icon.h as f32 * 0.42;
+    stroke_line(dest, cx - 1.0, cy - 5.0, cx + 5.0, cy + 1.0, color, sw + 0.6);
+    stroke_line(dest, cx + 2.0, cy - 2.0, cx - 2.0, cy + 2.0, color, sw + 1.2);
+    stroke_line(dest, cx - 4.0, cy - 1.0, cx + 1.0, cy + 4.0, color, sw);
+    let needle_tip_x = icon.x as f32 + 2.0;
+    let needle_tip_y = icon.bottom() as f32 - 2.0;
+    stroke_line(dest, cx - 1.5, cy + 1.5, needle_tip_x, needle_tip_y, color, sw.min(1.4));
+}
+
+fn draw_icon_save(dest: &mut crate::bitmap::Bitmap, icon: Rect, color: Color, sw: f32) {
+    let x = icon.x as f32 + 1.5;
+    let r = icon.right() as f32 - 1.5;
+    let b = icon.bottom() as f32 - 1.5;
+    let tray_top = b - icon.h as f32 * 0.32;
+    stroke_line(dest, x, tray_top, x, b, color, sw);
+    stroke_line(dest, x, b, r, b, color, sw);
+    stroke_line(dest, r, b, r, tray_top, color, sw);
+    let cx = icon.x as f32 + icon.w as f32 * 0.5;
+    let arrow_tip_y = b - 3.5;
+    let arrow_top_y = icon.y as f32 + 1.5;
+    stroke_line(dest, cx, arrow_top_y, cx, arrow_tip_y, color, sw);
+    let wing_span = (icon.w as f32 * 0.26).max(3.0);
+    let wing_y = arrow_tip_y - (icon.h as f32 * 0.24).max(3.0);
+    stroke_line(dest, cx - wing_span, wing_y, cx, arrow_tip_y, color, sw);
+    stroke_line(dest, cx + wing_span, wing_y, cx, arrow_tip_y, color, sw);
+}
+
+fn draw_icon_copy_image(dest: &mut crate::bitmap::Bitmap, icon: Rect, color: Color, sw: f32) {
+    let w = (icon.w as f32 * 0.68).round();
+    let h = (icon.h as f32 * 0.68).round();
+    stroke_rect(
+        dest,
+        icon.x as f32 + icon.w as f32 - w,
+        icon.y as f32,
+        w,
+        h,
+        color.with_alpha(160),
+        sw,
+    );
+    let fx = icon.x as f32;
+    let fy = icon.bottom() as f32 - h;
+    fill_rect(
+        dest,
+        fx as i32,
+        fy as i32,
+        w as i32,
+        h as i32,
+        Color::argb(220, 18, 22, 30),
+    );
+    stroke_rect(dest, fx, fy, w, h, color, sw);
+    stroke_line(
+        dest,
+        fx + 2.0,
+        fy + h - 2.0,
+        fx + w * 0.42,
+        fy + h * 0.40,
+        color,
+        sw.min(1.2),
+    );
+    stroke_line(
+        dest,
+        fx + w * 0.42,
+        fy + h * 0.40,
+        fx + w - 2.0,
+        fy + h - 2.0,
+        color,
+        sw.min(1.2),
+    );
+    fill_circle(dest, fx + w * 0.72, fy + h * 0.35, 1.2, color);
+}
+
+fn draw_icon_copy_path(dest: &mut crate::bitmap::Bitmap, icon: Rect, color: Color, sw: f32) {
+    let cx = icon.x as f32 + icon.w as f32 * 0.5;
+    let cy = icon.y as f32 + icon.h as f32 * 0.5;
+    let d = (icon.w as f32 * 0.26).max(3.0);
+    stroke_ellipse(dest, cx - d - 2.5, cy + d - 2.5, 5.0, 5.0, color, sw);
+    stroke_ellipse(dest, cx + d - 2.5, cy - d - 2.5, 5.0, 5.0, color, sw);
+    stroke_line(
+        dest,
+        cx - d * 0.5,
+        cy + d * 0.5,
+        cx + d * 0.5,
+        cy - d * 0.5,
+        color,
+        sw + 0.4,
+    );
+}
+
+fn draw_icon_copy_text(dest: &mut crate::bitmap::Bitmap, icon: Rect, color: Color, sw: f32) {
+    let x = icon.x as f32 + 1.5;
+    let y = icon.y as f32 + 1.5;
+    let r = icon.right() as f32 - 1.5;
+    let b = icon.bottom() as f32 - 1.5;
+    let bracket = (icon.w as f32 * 0.25).max(3.0);
+    stroke_line(dest, x, y, x + bracket, y, color, sw);
+    stroke_line(dest, x, y, x, y + bracket, color, sw);
+    stroke_line(dest, r - bracket, y, r, y, color, sw);
+    stroke_line(dest, r, y, r, y + bracket, color, sw);
+    stroke_line(dest, x, b, x + bracket, b, color, sw);
+    stroke_line(dest, x, b, x, b - bracket, color, sw);
+    stroke_line(dest, r - bracket, b, r, b, color, sw);
+    stroke_line(dest, r, b, r, b - bracket, color, sw);
+    let cx = (x + r) * 0.5;
+    let cy = (y + b) * 0.5;
+    let tw = bracket * 1.3;
+    let th = bracket * 1.4;
+    stroke_line(dest, cx - tw * 0.5, cy - th * 0.5, cx + tw * 0.5, cy - th * 0.5, color, sw);
+    stroke_line(dest, cx, cy - th * 0.5, cx, cy + th * 0.5, color, sw);
+}
+
+fn draw_icon_translate(dest: &mut crate::bitmap::Bitmap, icon: Rect, color: Color, scale: f32) {
+    let ax = icon.x as f32 + 0.5;
+    let ay = icon.y as f32 + 0.5;
+    let aw = (icon.w as f32 * 0.46).round();
+    let ah = (icon.h as f32 * 0.52).round();
+    let sw_a = (1.4 * scale).max(1.1);
+    stroke_line(dest, ax + aw * 0.5, ay, ax, ay + ah, color, sw_a);
+    stroke_line(dest, ax + aw * 0.5, ay, ax + aw, ay + ah, color, sw_a);
+    stroke_line(
+        dest,
+        ax + aw * 0.22,
+        ay + ah * 0.62,
+        ax + aw * 0.78,
+        ay + ah * 0.62,
+        color,
+        sw_a,
+    );
+
+    let cw = (icon.w as f32 * 0.54).round();
+    let ch = (icon.h as f32 * 0.58).round();
+    let cx = icon.right() as f32 - cw;
+    let cy = icon.bottom() as f32 - ch;
+    let sw_c = (1.3 * scale).max(1.1);
+    stroke_line(dest, cx + cw * 0.5, cy, cx + cw * 0.5, cy + ch * 0.20, color, sw_c);
+    stroke_line(dest, cx, cy + ch * 0.22, cx + cw, cy + ch * 0.22, color, sw_c);
+    stroke_line(
+        dest,
+        cx + cw * 0.5,
+        cy + ch * 0.22,
+        cx + cw * 0.32,
+        cy + ch * 0.60,
+        color,
+        sw_c,
+    );
+    stroke_line(
+        dest,
+        cx + cw * 0.32,
+        cy + ch * 0.60,
+        cx + cw * 0.05,
+        cy + ch,
+        color,
+        sw_c,
+    );
+    stroke_line(
+        dest,
+        cx + cw * 0.40,
+        cy + ch * 0.35,
+        cx + cw * 0.95,
+        cy + ch,
+        color,
+        sw_c,
+    );
+}
+
+fn draw_icon_close(dest: &mut crate::bitmap::Bitmap, icon: Rect, color: Color, sw: f32) {
+    let m = 2.0;
+    let x1 = icon.x as f32 + m;
+    let y1 = icon.y as f32 + m;
+    let x2 = icon.right() as f32 - m;
+    let y2 = icon.bottom() as f32 - m;
+    stroke_line(dest, x1, y1, x2, y2, color, sw + 0.2);
+    stroke_line(dest, x2, y1, x1, y2, color, sw + 0.2);
 }
 
 fn fill_round(bmp: &mut crate::bitmap::Bitmap, r: Rect, radius: i32, c: Color) {

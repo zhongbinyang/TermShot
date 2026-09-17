@@ -10,7 +10,10 @@ use crate::theme;
 use crate::toolbar::{ActionToolbar, ToolbarResult};
 use crate::util::wide;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
-use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, InvalidateRect, PAINTSTRUCT};
+use windows::Win32::Graphics::Gdi::{
+    BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject,
+    EndPaint, InvalidateRect, SelectObject, SetWindowOrgEx, PAINTSTRUCT, SRCCOPY,
+};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_1, VK_2, VK_3, VK_4, VK_A, VK_B, VK_C, VK_E, VK_ESCAPE, VK_H, VK_L, VK_M, VK_O, VK_P, VK_S,
     VK_T, VK_TAB, VK_X, VK_Z,
@@ -18,8 +21,8 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect, GetMessageW,
     GetWindowLongPtrW, RegisterClassExW, SetWindowLongPtrW, CS_DBLCLKS, CS_DROPSHADOW, GWLP_USERDATA,
-    MSG, WM_DESTROY, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_RBUTTONDOWN,
-    WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
+    MSG, WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT,
+    WM_RBUTTONDOWN, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
 };
 
 pub fn run(bmp: Bitmap, screen_rect: Rect) -> Option<(PostCaptureAction, Bitmap, AnnotationSession)> {
@@ -36,6 +39,7 @@ pub fn run(bmp: Bitmap, screen_rect: Rect) -> Option<(PostCaptureAction, Bitmap,
         text_at: Point::default(),
         capturing: false,
         lit: None,
+        prev_tip_rect: None,
     });
     state.ann.attach(&state.bmp);
     state.ann.select(AnnotKind::Arrow);
@@ -112,6 +116,7 @@ struct PinAsk {
     text_at: Point,
     capturing: bool,
     lit: Option<Bitmap>,
+    prev_tip_rect: Option<Rect>,
 }
 
 fn layout(bmp: &Bitmap, screen: Rect, work: Rect, scale: f32) -> (Rect, Rect) {
@@ -198,6 +203,7 @@ impl PinAsk {
                 self.on_key(hwnd, wparam.0 as u32);
                 LRESULT(0)
             }
+            WM_ERASEBKGND => LRESULT(1),
             WM_DESTROY => LRESULT(0),
             _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
         }
@@ -206,6 +212,32 @@ impl PinAsk {
     fn inv(&self, hwnd: HWND) {
         unsafe {
             let _ = InvalidateRect(hwnd, None, false);
+        }
+    }
+
+    fn inv_toolbar(&mut self, hwnd: HWND) {
+        let tb = self.toolbar.bounds;
+        let pad = sc(6, self.scale);
+        let mut dirty = tb.inflate(pad, pad);
+        if let Some((tip_r, _)) = self.toolbar.hover_tip(self.scale) {
+            dirty = dirty.union(tip_r.inflate(pad, pad));
+        }
+        if let Some(prev) = self.prev_tip_rect {
+            dirty = dirty.union(prev.inflate(pad, pad));
+        }
+        if let Some((tip_r, _)) = self.toolbar.hover_tip(self.scale) {
+            self.prev_tip_rect = Some(tip_r);
+        } else {
+            self.prev_tip_rect = None;
+        }
+        let rc = RECT {
+            left: dirty.x,
+            top: dirty.y,
+            right: dirty.right(),
+            bottom: dirty.bottom(),
+        };
+        unsafe {
+            let _ = InvalidateRect(hwnd, Some(&rc), false);
         }
     }
 
@@ -226,7 +258,7 @@ impl PinAsk {
             return;
         }
         if self.toolbar.set_hover(p) {
-            self.inv(hwnd);
+            self.inv_toolbar(hwnd);
         }
         let hit = self.toolbar.hit(p);
         if hit == ToolbarResult::Color || hit == ToolbarResult::Width || self.toolbar.hover_index >= 0 {
@@ -451,18 +483,27 @@ impl PinAsk {
         unsafe {
             let mut ps = PAINTSTRUCT::default();
             let hdc = BeginPaint(hwnd, &mut ps);
-            let mut rc = RECT::default();
-            let _ = GetClientRect(hwnd, &mut rc);
-            let client = Rect::from_ltrb(rc.left, rc.top, rc.right, rc.bottom);
-            fill_rect_hdc(hdc, client, theme::WIN_BG);
+            let rc = ps.rcPaint;
+            let rw = (rc.right - rc.left).max(1);
+            let rh = (rc.bottom - rc.top).max(1);
+
+            let mem_dc = CreateCompatibleDC(hdc);
+            let mem_bmp = CreateCompatibleBitmap(hdc, rw, rh);
+            let old_bmp = SelectObject(mem_dc, mem_bmp);
+            let _ = SetWindowOrgEx(mem_dc, rc.left, rc.top, None);
+
+            let mut client_rc = RECT::default();
+            let _ = GetClientRect(hwnd, &mut client_rc);
+            let client = Rect::from_ltrb(client_rc.left, client_rc.top, client_rc.right, client_rc.bottom);
+            fill_rect_hdc(mem_dc, client, theme::WIN_BG);
             let src = self.lit.as_ref().unwrap_or(&self.bmp);
-            src.blit_to_hdc(hdc, self.image_client);
+            src.blit_to_hdc(mem_dc, self.image_client);
             let ic = self.image_client;
             let bw = self.bmp.width.max(1);
             let bh = self.bmp.height.max(1);
             let ws = ic.w as f32 / bw as f32;
             self.ann.paint_draft_hdc(
-                hdc,
+                mem_dc,
                 |p| Point::new(ic.x + p.x * ic.w / bw, ic.y + p.y * ic.h / bh),
                 ws,
             );
@@ -476,11 +517,15 @@ impl PinAsk {
             if tb.w > 8 && tb.h > 8 {
                 let mut chrome = Bitmap::new(tb.w, tb.h);
                 self.toolbar.paint_at(&mut chrome, scale, Point::new(tb.x, tb.y));
-                chrome.blit_to_hdc(hdc, tb);
+                chrome.blit_to_hdc(mem_dc, tb);
             }
             if let Some((tip_r, text)) = self.toolbar.hover_tip(scale) {
-                crate::draw::paint_chip_hdc(hdc, tip_r, &text, scale);
+                crate::draw::paint_chip_hdc(mem_dc, tip_r, &text, scale);
             }
+            let _ = BitBlt(hdc, rc.left, rc.top, rw, rh, mem_dc, rc.left, rc.top, SRCCOPY);
+            SelectObject(mem_dc, old_bmp);
+            let _ = DeleteObject(mem_bmp);
+            let _ = DeleteDC(mem_dc);
             let _ = EndPaint(hwnd, &ps);
         }
     }

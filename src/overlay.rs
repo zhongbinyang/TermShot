@@ -13,7 +13,10 @@ use crate::toolbar::{ActionToolbar, ToolbarResult};
 use crate::util::{clamp_i32, wide};
 use crate::windows_enum::{hit_test, WindowInfo};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
-use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, InvalidateRect, PAINTSTRUCT};
+use windows::Win32::Graphics::Gdi::{
+    BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject,
+    EndPaint, InvalidateRect, SelectObject, SetWindowOrgEx, PAINTSTRUCT, SRCCOPY,
+};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_1, VK_2, VK_3, VK_4, VK_A, VK_B, VK_C, VK_E, VK_ESCAPE, VK_H, VK_L, VK_M, VK_O, VK_P, VK_R,
     VK_RETURN, VK_S, VK_T, VK_TAB, VK_X, VK_Z,
@@ -21,9 +24,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect, GetMessageW,
     PostQuitMessage, RegisterClassExW, SetWindowLongPtrW, ShowWindow, TranslateMessage, WM_SIZE,
-    CS_DBLCLKS, GWLP_USERDATA, MSG, SW_SHOW, WM_DESTROY, WM_DPICHANGED, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MOUSEMOVE, WM_PAINT, WM_RBUTTONDOWN, WM_SYSKEYDOWN, WNDCLASSEXW, WS_EX_TOOLWINDOW,
-    WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
+    CS_DBLCLKS, GWLP_USERDATA, MSG, SW_SHOW, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_KEYDOWN,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_RBUTTONDOWN, WM_SYSKEYDOWN, WNDCLASSEXW,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
 };
 
 const DRAG_THRESHOLD: i32 = 4;
@@ -61,6 +64,7 @@ struct OverlayState {
     composed: Option<Bitmap>,
     shot_gdi: Option<GdiBitmap>,
     veiled_gdi: Option<GdiBitmap>,
+    prev_tip_rect: Option<Rect>,
 }
 
 struct Outcome {
@@ -108,6 +112,7 @@ pub fn run(
         composed: None,
         shot_gdi,
         veiled_gdi,
+        prev_tip_rect: None,
     });
     if state.veiled_gdi.is_some() {
         state.veiled = Bitmap::new(1, 1);
@@ -226,6 +231,7 @@ impl OverlayState {
                 self.paint(hwnd);
                 LRESULT(0)
             }
+            WM_ERASEBKGND => LRESULT(1),
             WM_MOUSEMOVE => {
                 let p = lparam_point(lparam);
                 self.on_move(hwnd, p);
@@ -298,6 +304,38 @@ impl OverlayState {
     fn invalidate(&self, hwnd: HWND) {
         unsafe {
             let _ = InvalidateRect(hwnd, None, false);
+        }
+    }
+
+    fn invalidate_toolbar(&mut self, hwnd: HWND) {
+        let scale = if let Some(hr) = self.highlight_bmp() {
+            self.ui_scale(hwnd, hr)
+        } else {
+            1.0
+        };
+        let tb = self.dest_for_bmp(hwnd, self.toolbar.bounds);
+        let pad = sc(6, scale);
+        let mut dirty = tb.inflate(pad, pad);
+        if let Some((tip_r, _)) = self.toolbar.hover_tip(scale) {
+            let tip_dest = self.dest_for_bmp(hwnd, tip_r);
+            dirty = dirty.union(tip_dest.inflate(pad, pad));
+        }
+        if let Some(prev) = self.prev_tip_rect {
+            dirty = dirty.union(prev.inflate(pad, pad));
+        }
+        if let Some((tip_r, _)) = self.toolbar.hover_tip(scale) {
+            self.prev_tip_rect = Some(self.dest_for_bmp(hwnd, tip_r));
+        } else {
+            self.prev_tip_rect = None;
+        }
+        let rc = RECT {
+            left: dirty.x,
+            top: dirty.y,
+            right: dirty.right(),
+            bottom: dirty.bottom(),
+        };
+        unsafe {
+            let _ = InvalidateRect(hwnd, Some(&rc), false);
         }
     }
 
@@ -405,7 +443,7 @@ impl OverlayState {
                 cursor_arrow();
             }
             if dirty {
-                self.invalidate(hwnd);
+                self.invalidate_toolbar(hwnd);
             }
             return;
         }
@@ -797,24 +835,33 @@ impl OverlayState {
         unsafe {
             let mut ps = PAINTSTRUCT::default();
             let hdc = BeginPaint(hwnd, &mut ps);
+            let rc = ps.rcPaint;
+            let rw = (rc.right - rc.left).max(1);
+            let rh = (rc.bottom - rc.top).max(1);
+
+            let mem_dc = CreateCompatibleDC(hdc);
+            let mem_bmp = CreateCompatibleBitmap(hdc, rw, rh);
+            let old_bmp = SelectObject(mem_dc, mem_bmp);
+            let _ = SetWindowOrgEx(mem_dc, rc.left, rc.top, None);
+
             let client = self.client_size(hwnd);
             let full = Rect::new(0, 0, self.shot.width, self.shot.height);
             if let Some(g) = &self.veiled_gdi {
-                g.blt(hdc, full, full);
+                g.blt(mem_dc, full, full);
             } else {
-                self.veiled.blit_to_hdc(hdc, full);
+                self.veiled.blit_to_hdc(mem_dc, full);
             }
             if let Some(hr) = self.highlight_bmp() {
                 let dest = self.dest_for_bmp(hwnd, hr);
                 let scale = self.ui_scale(hwnd, hr);
                 if self.awaiting {
                     if let Some(lit) = &self.composed {
-                        lit.blit_to_hdc(hdc, dest);
+                        lit.blit_to_hdc(mem_dc, dest);
                     } else {
-                        self.blit_shot_region(hdc, dest, hr);
+                        self.blit_shot_region(mem_dc, dest, hr);
                     }
                     self.ann.paint_draft_hdc(
-                        hdc,
+                        mem_dc,
                         |p| {
                             let r = self.dest_for_bmp(hwnd, Rect::new(p.x, p.y, 1, 1));
                             Point::new(r.x, r.y)
@@ -822,15 +869,15 @@ impl OverlayState {
                         1.0,
                     );
                 } else {
-                    self.blit_shot_region(hdc, dest, hr);
+                    self.blit_shot_region(mem_dc, dest, hr);
                 }
                 stroke_rect_hdc(
-                    hdc,
+                    mem_dc,
                     dest,
                     Color::argb(220, 8, 10, 14),
                     sc(3, scale),
                 );
-                stroke_rect_hdc(hdc, dest, theme::ACCENT, 1);
+                stroke_rect_hdc(mem_dc, dest, theme::ACCENT, 1);
                 if self.awaiting {
                     self.toolbar.sync(&self.ann);
                     let confine = {
@@ -850,10 +897,10 @@ impl OverlayState {
                     if tb.w > 8 && tb.h > 8 {
                         let mut chrome = Bitmap::new(tb.w, tb.h);
                         self.toolbar.paint_at(&mut chrome, scale, Point::new(tb.x, tb.y));
-                        chrome.blit_to_hdc(hdc, self.dest_for_bmp(hwnd, tb));
+                        chrome.blit_to_hdc(mem_dc, self.dest_for_bmp(hwnd, tb));
                     }
                     if let Some((tip_r, text)) = self.toolbar.hover_tip(scale) {
-                        paint_chip(hdc, self.dest_for_bmp(hwnd, tip_r), &text, scale);
+                        paint_chip(mem_dc, self.dest_for_bmp(hwnd, tip_r), &text, scale);
                     }
                 }
             }
@@ -863,7 +910,7 @@ impl OverlayState {
                     .max(1.0);
                 let c = self.dest_for_bmp(hwnd, Rect::new(self.cursor_bmp.x, self.cursor_bmp.y, 1, 1));
                 gdi_line(
-                    hdc,
+                    mem_dc,
                     0,
                     c.y,
                     client.w.max(self.shot.width),
@@ -872,7 +919,7 @@ impl OverlayState {
                     scale.max(1.0) as i32,
                 );
                 gdi_line(
-                    hdc,
+                    mem_dc,
                     c.x,
                     0,
                     c.x,
@@ -881,15 +928,19 @@ impl OverlayState {
                     scale.max(1.0) as i32,
                 );
                 paint_magnifier_hdc(
-                    hdc,
+                    mem_dc,
                     &self.shot,
                     self.cursor_bmp,
                     self.bmp_pt_to_screen(self.cursor_bmp),
                     scale,
                     full,
                 );
-                paint_capture_hint(hdc, self, hwnd, scale);
+                paint_capture_hint(mem_dc, self, hwnd, scale);
             }
+            let _ = BitBlt(hdc, rc.left, rc.top, rw, rh, mem_dc, rc.left, rc.top, SRCCOPY);
+            SelectObject(mem_dc, old_bmp);
+            let _ = DeleteObject(mem_bmp);
+            let _ = DeleteDC(mem_dc);
             let _ = EndPaint(hwnd, &ps);
         }
     }
