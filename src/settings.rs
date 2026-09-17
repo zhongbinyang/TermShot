@@ -139,37 +139,20 @@ impl Settings {
 }
 
 pub fn format_hotkey(modifiers: u32, key: u32) -> String {
-    let mut parts = Vec::new();
-    if modifiers & MOD_CONTROL_BIT != 0 {
-        parts.push("Ctrl");
-    }
-    if modifiers & MOD_SHIFT_BIT != 0 {
-        parts.push("Shift");
-    }
-    if modifiers & MOD_ALT_BIT != 0 {
-        parts.push("Alt");
-    }
-    if modifiers & MOD_WIN_BIT != 0 {
-        parts.push("Win");
-    }
-    parts.push(format_key(key));
-    // leak-free: own the key string
-    let key_s = format_key(key).to_string();
     let mut out = Vec::new();
     if modifiers & MOD_CONTROL_BIT != 0 {
-        out.push("Ctrl".into());
+        out.push("Ctrl");
     }
     if modifiers & MOD_SHIFT_BIT != 0 {
-        out.push("Shift".into());
+        out.push("Shift");
     }
     if modifiers & MOD_ALT_BIT != 0 {
-        out.push("Alt".into());
+        out.push("Alt");
     }
     if modifiers & MOD_WIN_BIT != 0 {
-        out.push("Win".into());
+        out.push("Win");
     }
-    out.push(key_s);
-    let _ = parts;
+    out.push(format_key(key));
     out.join("+")
 }
 

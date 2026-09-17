@@ -98,8 +98,10 @@ pub fn paint_arrow(bmp: &mut Bitmap, from: Point, to: Point, color: Color, width
     }
     let ux = dx / len;
     let uy = dy / len;
-    let head_len = (width * 3.4).clamp(9.0, len * 0.72);
-    let head_half = (width * 1.55).max(4.5);
+    let max_head = (len * 0.72).max(1.0);
+    let min_head = (width * 1.5).min(max_head);
+    let head_len = (width * 3.4).clamp(min_head, max_head);
+    let head_half = (width * 1.55).min(head_len * 0.8).max(2.0);
     let back_x = to.x as f32 - ux * head_len;
     let back_y = to.y as f32 - uy * head_len;
     let halo = Color::argb(150, 0, 0, 0);
@@ -246,8 +248,10 @@ pub fn paint_arrow_hdc(
     }
     let ux = dx / len;
     let uy = dy / len;
-    let head_len = (width * 3.4).clamp(9.0, len * 0.72);
-    let head_half = (width * 1.55).max(4.5);
+    let max_head = (len * 0.72).max(1.0);
+    let min_head = (width * 1.5).min(max_head);
+    let head_len = (width * 3.4).clamp(min_head, max_head);
+    let head_half = (width * 1.55).min(head_len * 0.8).max(2.0);
     let back_x = to.x as f32 - ux * head_len;
     let back_y = to.y as f32 - uy * head_len;
     let halo = Color::argb(150, 0, 0, 0);
@@ -392,3 +396,37 @@ pub fn draw_text_hdc(
         let _ = DeleteObject(font);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_paint_arrow_does_not_panic_on_short_vector() {
+        let mut bmp = Bitmap::new(100, 100);
+        let color = Color::rgb(255, 0, 0);
+
+        // Sub-2 pixel (should safely return without panicking)
+        paint_arrow(&mut bmp, Point::new(10, 10), Point::new(11, 10), color, 2.0);
+        // Short vectors that previously caused assertion failure in clamp:
+        paint_arrow(&mut bmp, Point::new(10, 10), Point::new(12, 10), color, 2.0);
+        paint_arrow(&mut bmp, Point::new(10, 10), Point::new(13, 10), color, 2.0);
+        paint_arrow(&mut bmp, Point::new(10, 10), Point::new(15, 10), color, 3.0);
+        paint_arrow(&mut bmp, Point::new(10, 10), Point::new(18, 10), color, 4.0);
+        paint_arrow(&mut bmp, Point::new(10, 10), Point::new(22, 10), color, 5.0);
+        // Normal vector
+        paint_arrow(&mut bmp, Point::new(10, 10), Point::new(80, 80), color, 3.0);
+        // Reverse vector
+        paint_arrow(&mut bmp, Point::new(80, 80), Point::new(10, 10), color, 3.0);
+    }
+
+    #[test]
+    fn test_paint_arrow_extreme_widths() {
+        let mut bmp = Bitmap::new(200, 200);
+        let color = Color::rgb(0, 255, 0);
+        paint_arrow(&mut bmp, Point::new(10, 10), Point::new(50, 50), color, 0.5);
+        paint_arrow(&mut bmp, Point::new(10, 10), Point::new(50, 50), color, 50.0);
+        paint_arrow(&mut bmp, Point::new(10, 10), Point::new(10, 10), color, 2.0);
+    }
+}
+
