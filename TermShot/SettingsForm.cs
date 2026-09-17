@@ -19,10 +19,8 @@ internal sealed class SettingsForm : Form
     private readonly ModernButton _recordBtn;
     private readonly ModernCheck _quoteCheck;
     private readonly ModernCheck _startupCheck;
-    private readonly ModernCheck _ollamaCheck;
-    private readonly ModernInput _hostInput;
+    private readonly ModernInput _apiKeyInput;
     private readonly ModernInput _modelInput;
-    private readonly LangSwitch _langSwitch;
     private readonly Label _statusHint;
 
     private bool _recording;
@@ -166,35 +164,21 @@ internal sealed class SettingsForm : Form
         var card2 = new CardPanel(cardW, _scale) { Left = padX, Top = y };
         cy = cardPad;
 
-        // 1. 启用开关
-        _ollamaCheck = new ModernCheck("启用 Ollama 本地模型（用于截图识字与一键翻译）", live.OllamaOcr, _scale)
-        {
-            Left = cardPad,
-            Top = cy,
-            Size = new Size(cardW - cardPad * 2, fieldH)
-        };
-        _ollamaCheck.CheckedChanged += (_, _) => SyncOllamaEnabled();
-        card2.Controls.Add(_ollamaCheck);
-        cy += rowH;
-
-        card2.AddDivider(cy);
-        cy += S(10);
-
-        // 2. 服务地址
-        _hostInput = new ModernInput(
-            string.IsNullOrWhiteSpace(live.OllamaHost) ? AppSettings.DefaultOllamaHost : live.OllamaHost,
-            fullCtrlW, fieldH, _scale)
+        // 1. API Key
+        _apiKeyInput = new ModernInput(live.DeepSeekApiKey ?? "", fullCtrlW, fieldH, _scale, password: true)
         {
             Left = ctrlLeft,
             Top = cy
         };
-        card2.Controls.Add(CreateRowLabel("服务地址", cardPad, cy, labelW, fieldH));
-        card2.Controls.Add(_hostInput);
+        card2.Controls.Add(CreateRowLabel("API Key", cardPad, cy, labelW, fieldH));
+        card2.Controls.Add(_apiKeyInput);
         cy += rowH;
 
-        // 3. 模型名称
+        // 2. 模型名称
         _modelInput = new ModernInput(
-            string.IsNullOrWhiteSpace(live.OllamaModel) ? AppSettings.DefaultOllamaModel : live.OllamaModel,
+            string.IsNullOrWhiteSpace(live.DeepSeekModel)
+                ? AppSettings.DefaultDeepSeekModel
+                : live.DeepSeekModel,
             fullCtrlW, fieldH, _scale)
         {
             Left = ctrlLeft,
@@ -202,16 +186,6 @@ internal sealed class SettingsForm : Form
         };
         card2.Controls.Add(CreateRowLabel("模型名称", cardPad, cy, labelW, fieldH));
         card2.Controls.Add(_modelInput);
-        cy += rowH;
-
-        // 4. 翻译目标
-        _langSwitch = new LangSwitch(live.TranslateTarget == TranslateTarget.English, S(136), fieldH, _scale)
-        {
-            Left = ctrlLeft,
-            Top = cy
-        };
-        card2.Controls.Add(CreateRowLabel("翻译目标", cardPad, cy, labelW, fieldH));
-        card2.Controls.Add(_langSwitch);
         cy += fieldH + cardPad;
 
         card2.Height = cy;
@@ -268,7 +242,6 @@ internal sealed class SettingsForm : Form
         ClientSize = new Size(formW, y);
 
         SyncQuoteEnabled();
-        SyncOllamaEnabled();
     }
 
     private static Label CreateSectionTitle(string text, int x, int y)
@@ -305,14 +278,6 @@ internal sealed class SettingsForm : Form
         bool usesPath = PostCaptureActions.UsesPath(action);
         _quoteCheck.Enabled = usesPath;
         _quoteCheck.ForeColor = usesPath ? Theme.Text : Theme.Dim;
-    }
-
-    private void SyncOllamaEnabled()
-    {
-        bool on = _ollamaCheck.Checked;
-        _hostInput.Enabled = on;
-        _modelInput.Enabled = on;
-        _langSwitch.Enabled = on;
     }
 
     private PostCaptureAction SelectedAction()
@@ -394,12 +359,11 @@ internal sealed class SettingsForm : Form
         _live.PostCaptureAction = SelectedAction();
         _live.QuotePath = _quoteCheck.Checked;
         _live.StartWithWindows = _startupCheck.Checked;
-        _live.OllamaOcr = _ollamaCheck.Checked;
-        var host = _hostInput.Value.Trim();
+        _live.DeepSeekApiKey = _apiKeyInput.Value.Trim();
         var model = _modelInput.Value.Trim();
-        _live.OllamaHost = string.IsNullOrWhiteSpace(host) ? AppSettings.DefaultOllamaHost : host;
-        _live.OllamaModel = string.IsNullOrWhiteSpace(model) ? AppSettings.DefaultOllamaModel : model;
-        _live.TranslateTarget = _langSwitch.IsEnglish ? TranslateTarget.English : TranslateTarget.ZhHans;
+        _live.DeepSeekModel = string.IsNullOrWhiteSpace(model)
+            ? AppSettings.DefaultDeepSeekModel
+            : model;
         _live.HotkeyModifiers = _mods;
         _live.HotkeyKey = (int)_key;
         _live.Save();
@@ -455,6 +419,7 @@ internal sealed class SettingsForm : Form
         private readonly TextBox _inner;
         private readonly ToolTip _tip = new();
         private readonly float _scale;
+        private readonly bool _password;
         private bool _focused;
 
         public string Value
@@ -463,13 +428,15 @@ internal sealed class SettingsForm : Form
             set
             {
                 _inner.Text = value ?? "";
-                _tip.SetToolTip(_inner, _inner.Text);
+                if (!_password)
+                    _tip.SetToolTip(_inner, _inner.Text);
             }
         }
 
-        public ModernInput(string text, int width, int height, float scale)
+        public ModernInput(string text, int width, int height, float scale, bool password = false)
         {
             _scale = scale;
+            _password = password;
             Width = width;
             Height = height;
             DoubleBuffered = true;
@@ -484,16 +451,22 @@ internal sealed class SettingsForm : Form
                 ForeColor = Theme.Text,
                 Font = Theme.Ui,
                 Left = pad,
-                Width = width - pad * 2
+                Width = width - pad * 2,
+                UseSystemPasswordChar = password
             };
 
             // 垂直居中
             _inner.Top = Math.Max(0, (height - _inner.PreferredHeight) / 2);
 
-            _tip.SetToolTip(_inner, text);
+            if (!password)
+                _tip.SetToolTip(_inner, text);
             _inner.GotFocus += (_, _) => { _focused = true; Invalidate(); };
             _inner.LostFocus += (_, _) => { _focused = false; Invalidate(); };
-            _inner.TextChanged += (_, _) => _tip.SetToolTip(_inner, _inner.Text);
+            _inner.TextChanged += (_, _) =>
+            {
+                if (!_password)
+                    _tip.SetToolTip(_inner, _inner.Text);
+            };
 
             Controls.Add(_inner);
         }
@@ -620,73 +593,6 @@ internal sealed class SettingsForm : Form
 
             TextRenderer.DrawText(g, Text, Font, ClientRectangle, textCol,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
-        }
-    }
-
-    private sealed class LangSwitch : Panel
-    {
-        public bool IsEnglish { get; private set; }
-        private readonly float _scale;
-
-        public LangSwitch(bool isEnglish, int width, int height, float scale)
-        {
-            IsEnglish = isEnglish;
-            Width = width;
-            Height = height;
-            _scale = scale;
-            DoubleBuffered = true;
-            Cursor = Cursors.Hand;
-        }
-
-        protected override void OnMouseClick(MouseEventArgs e)
-        {
-            if (!Enabled) return;
-            base.OnMouseClick(e);
-            IsEnglish = e.X >= Width / 2;
-            Invalidate();
-        }
-
-        protected override void OnEnabledChanged(EventArgs e)
-        {
-            base.OnEnabledChanged(e);
-            Invalidate();
-        }
-
-        protected override void OnPaint(PaintEventArgs e)
-        {
-            base.OnPaint(e);
-            var g = e.Graphics;
-            g.SmoothingMode = SmoothingMode.AntiAlias;
-
-            var r = new RectangleF(0.5f, 0.5f, Width - 1f, Height - 1f);
-            using var outer = CreateRound(r, 5f * _scale);
-            using var fill = new SolidBrush(Color.FromArgb(0x0F, 0x13, 0x1A));
-            g.FillPath(fill, outer);
-
-            using var border = new Pen(Color.FromArgb(0x2B, 0x36, 0x46), 1f);
-            g.DrawPath(border, outer);
-
-            int half = Width / 2;
-            var pillRect = IsEnglish
-                ? new RectangleF(half + 2, 2, half - 4, Height - 4)
-                : new RectangleF(2, 2, half - 4, Height - 4);
-
-            using var pillPath = CreateRound(pillRect, 4f * _scale);
-            Color pillCol = Enabled ? Theme.Accent : Color.FromArgb(0x25, 0x30, 0x3E);
-            using var pillBrush = new SolidBrush(pillCol);
-            g.FillPath(pillBrush, pillPath);
-
-            Color activeText = Enabled ? Color.FromArgb(0x06, 0x12, 0x10) : Theme.Dim;
-            var zhColor = !IsEnglish ? activeText : Theme.Dim;
-            var enColor = IsEnglish ? activeText : Theme.Dim;
-
-            var zhRect = new Rectangle(0, 0, half, Height);
-            var enRect = new Rectangle(half, 0, half, Height);
-
-            TextRenderer.DrawText(g, "中文", Theme.UiBold, zhRect, zhColor,
-                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
-            TextRenderer.DrawText(g, "英文", Theme.UiBold, enRect, enColor,
-                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
         }
     }
 

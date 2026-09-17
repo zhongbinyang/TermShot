@@ -10,6 +10,8 @@ internal sealed class CapturePinForm : Form
     private readonly AnnotationSession _ann = new();
     private Rectangle _imageClient;
     private float _scale = 1f;
+    private TextBox? _textBox;
+    private PointF _textAt;
 
     public PostCaptureAction? Chosen { get; private set; }
 
@@ -29,6 +31,12 @@ internal sealed class CapturePinForm : Form
                  ControlStyles.OptimizedDoubleBuffer, true);
         Cursor = Cursors.Cross;
         Bounds = screenRect;
+        _ann.Attach(_bmp);
+        FormClosed += (_, _) =>
+        {
+            EndTextInput(commit: false);
+            _ann.Dispose();
+        };
         KeyDown += OnKeyDown;
     }
 
@@ -47,7 +55,21 @@ internal sealed class CapturePinForm : Form
     {
         base.OnHandleCreated(e);
         _ann.WidthIndex = 1;
+        _ann.Select(AnnotKind.Arrow);
         LayoutPin(_screenRect);
+    }
+
+    protected override bool ProcessDialogKey(Keys keyData)
+    {
+        if (_textBox != null)
+            return false;
+        if ((keyData & Keys.KeyCode) == Keys.Tab)
+        {
+            _ann.CycleTab();
+            Invalidate();
+            return true;
+        }
+        return base.ProcessDialogKey(keyData);
     }
 
     protected override void OnShown(EventArgs e)
@@ -64,7 +86,7 @@ internal sealed class CapturePinForm : Form
     {
         var working = Screen.FromPoint(screenRect.Location).WorkingArea;
         _scale = DeviceDpi > 0 ? DeviceDpi / 96f : 1f;
-        int toolH = (int)Math.Round(76 * _scale);
+        int toolH = (int)Math.Round(96 * _scale);
         int gap = (int)Math.Round(8 * _scale);
         int margin = 8;
 
@@ -74,7 +96,7 @@ internal sealed class CapturePinForm : Form
         int imgW = Math.Max(1, (int)Math.Round(_bmp.Width * fit));
         int imgH = Math.Max(1, (int)Math.Round(_bmp.Height * fit));
 
-        int toolW = (int)Math.Round(420 * _scale);
+        int toolW = (int)Math.Round(560 * _scale);
         int formW = Math.Max(imgW, toolW);
         bool outside = screenRect.Y + imgH + gap + toolH <= working.Bottom - margin;
         int formH = outside ? imgH + gap + toolH : imgH;
@@ -97,8 +119,12 @@ internal sealed class CapturePinForm : Form
 
     private void SyncToolbar()
     {
-        _toolbar.ArrowActive = _ann.ArrowTool;
-        _toolbar.UndoEnabled = _ann.HasMarks || _ann.Draft != null;
+        _toolbar.Tool = _ann.Tool;
+        _toolbar.ShapeKind = _ann.ShapeKind;
+        _toolbar.StrokeKind = _ann.StrokeKind;
+        _toolbar.ShowPalette = _ann.ShowPalette;
+        _toolbar.ShowColor = _ann.ShowColor;
+        _toolbar.UndoEnabled = _ann.HasMarks || _ann.HasDraft || _textBox != null;
         _toolbar.ColorIndex = _ann.ColorIndex;
         _toolbar.WidthIndex = _ann.WidthIndex;
     }
@@ -117,11 +143,10 @@ internal sealed class CapturePinForm : Form
         using (var border = new Pen(Theme.Accent, 1f) { Alignment = PenAlignment.Inset })
             g.DrawRectangle(border, _imageClient.X, _imageClient.Y, _imageClient.Width - 1, _imageClient.Height - 1);
 
-        float sx = _imageClient.Width / (float)Math.Max(1, _bmp.Width);
-        float sy = _imageClient.Height / (float)Math.Max(1, _bmp.Height);
         var state = g.Save();
         g.SetClip(_imageClient);
-        _ann.Paint(g, p => new PointF(_imageClient.X + p.X * sx, _imageClient.Y + p.Y * sy), sx);
+        g.CompositingMode = CompositingMode.SourceOver;
+        _ann.Paint(g, new Rectangle(0, 0, _bmp.Width, _bmp.Height), _imageClient);
         g.Restore(state);
 
         _scale = DeviceDpi / 96f;
@@ -132,7 +157,7 @@ internal sealed class CapturePinForm : Form
 
     protected override void OnMouseMove(MouseEventArgs e)
     {
-        if (_ann.Draft != null)
+        if (_ann.HasDraft)
         {
             _ann.Move(ClientToBmp(e.Location), snap45: ModifierKeys.HasFlag(Keys.Shift));
             Invalidate();
@@ -148,9 +173,10 @@ internal sealed class CapturePinForm : Form
     {
         if (e.Button == MouseButtons.Right)
         {
-            if (_ann.Draft != null)
+            if (_ann.HasDraft)
             {
                 _ann.CancelDraft();
+                Capture = false;
                 Invalidate();
                 return;
             }
@@ -176,14 +202,30 @@ internal sealed class CapturePinForm : Form
             }
             if (hit is not ToolbarResult.Miss)
             {
+                if (_textBox != null)
+                    EndTextInput(commit: true);
                 _toolbar.PressedIndex = _toolbar.HitTest(e.Location);
                 if (_toolbar.PressedIndex >= 0)
                     Invalidate();
                 return;
             }
-            if (_ann.ArrowTool && _imageClient.Contains(e.Location))
+            if (_textBox != null)
             {
-                _ann.Begin(ClientToBmp(e.Location));
+                EndTextInput(commit: true);
+                Invalidate();
+            }
+            if (!_imageClient.Contains(e.Location))
+                return;
+            var at = ClientToBmp(e.Location);
+            if (_ann.IsTextTool)
+            {
+                BeginTextAt(at, e.Location);
+                return;
+            }
+            if (_ann.CanDraw)
+            {
+                _ann.Begin(at);
+                Capture = true;
                 Cursor = Cursors.Cross;
                 Invalidate();
             }
@@ -195,10 +237,11 @@ internal sealed class CapturePinForm : Form
     {
         if (e.Button == MouseButtons.Left)
         {
-            if (_ann.Draft != null)
+            if (_ann.HasDraft)
             {
                 _ann.Move(ClientToBmp(e.Location), snap45: ModifierKeys.HasFlag(Keys.Shift));
                 _ann.CommitDraft();
+                Capture = false;
                 Invalidate();
                 return;
             }
@@ -225,17 +268,58 @@ internal sealed class CapturePinForm : Form
         e.SuppressKeyPress = true;
         if (e.KeyCode == Keys.Escape)
         {
-            if (_ann.Draft != null)
+            if (_textBox != null)
+            {
+                EndTextInput(commit: false);
+                Invalidate();
+                return;
+            }
+            if (_ann.HasDraft)
             {
                 _ann.CancelDraft();
+                Capture = false;
                 Invalidate();
                 return;
             }
             Cancel();
         }
+        else if (_textBox != null)
+        {
+            e.SuppressKeyPress = false;
+        }
+        else if (e.KeyCode == Keys.Tab)
+        {
+            _ann.CycleTab();
+            Invalidate();
+        }
         else if (e.KeyCode == Keys.A)
         {
-            _ann.ArrowTool = !_ann.ArrowTool;
+            _ann.Toggle(AnnotKind.Arrow);
+            Invalidate();
+        }
+        else if (e.KeyCode == Keys.B)
+        {
+            _ann.Toggle(AnnotKind.Pencil);
+            Invalidate();
+        }
+        else if (e.KeyCode == Keys.H)
+        {
+            _ann.Toggle(AnnotKind.Marker);
+            Invalidate();
+        }
+        else if (e.KeyCode == Keys.M)
+        {
+            _ann.Toggle(AnnotKind.Mosaic);
+            Invalidate();
+        }
+        else if (e.KeyCode == Keys.X)
+        {
+            _ann.Toggle(AnnotKind.Text);
+            Invalidate();
+        }
+        else if (e.KeyCode == Keys.E)
+        {
+            _ann.Toggle(AnnotKind.Eraser);
             Invalidate();
         }
         else if (e.KeyCode == Keys.Z)
@@ -268,7 +352,7 @@ internal sealed class CapturePinForm : Form
             return Cursors.Hand;
         if (hit is ToolbarResult.Chrome)
             return Cursors.Default;
-        if (_ann.ArrowTool && _imageClient.Contains(client))
+        if (_ann.ToolActive && _imageClient.Contains(client))
             return Cursors.Cross;
         return Cursors.Default;
     }
@@ -286,11 +370,43 @@ internal sealed class CapturePinForm : Form
     {
         switch (result)
         {
-            case ToolbarResult.Arrow:
-                _ann.ArrowTool = !_ann.ArrowTool;
+            case ToolbarResult.Shape:
+                EndTextInput(commit: true);
+                _ann.ToggleShape();
+                Invalidate();
+                break;
+            case ToolbarResult.Stroke:
+                EndTextInput(commit: true);
+                _ann.ToggleStroke();
+                Invalidate();
+                break;
+            case ToolbarResult.Pencil:
+                EndTextInput(commit: true);
+                _ann.Toggle(AnnotKind.Pencil);
+                Invalidate();
+                break;
+            case ToolbarResult.Marker:
+                EndTextInput(commit: true);
+                _ann.Toggle(AnnotKind.Marker);
+                Invalidate();
+                break;
+            case ToolbarResult.Mosaic:
+                EndTextInput(commit: true);
+                _ann.Toggle(AnnotKind.Mosaic);
+                Invalidate();
+                break;
+            case ToolbarResult.AnnotText:
+                EndTextInput(commit: true);
+                _ann.Toggle(AnnotKind.Text);
+                Invalidate();
+                break;
+            case ToolbarResult.Eraser:
+                EndTextInput(commit: true);
+                _ann.Toggle(AnnotKind.Eraser);
                 Invalidate();
                 break;
             case ToolbarResult.Undo:
+                EndTextInput(commit: false);
                 if (_ann.Undo()) Invalidate();
                 break;
             case ToolbarResult.Close:
@@ -305,6 +421,7 @@ internal sealed class CapturePinForm : Form
 
     private void Choose(PostCaptureAction action)
     {
+        EndTextInput(commit: true);
         _ann.CommitDraft();
         _ann.Stamp(_bmp, Point.Empty);
         Chosen = action;
@@ -312,8 +429,56 @@ internal sealed class CapturePinForm : Form
         Close();
     }
 
+    private void BeginTextAt(PointF bmpPt, Point client)
+    {
+        EndTextInput(commit: true);
+        _textAt = bmpPt;
+        float px = Math.Clamp(_ann.Width * 3.4f, 12f, 26f);
+        _textBox = new TextBox
+        {
+            BorderStyle = BorderStyle.FixedSingle,
+            BackColor = Color.FromArgb(0x12, 0x18, 0x22),
+            ForeColor = _ann.Color,
+            Font = new Font("Segoe UI", px, FontStyle.Bold, GraphicsUnit.Pixel),
+            Width = Math.Max(160, (int)(220 * _scale)),
+            ImeMode = ImeMode.On
+        };
+        _textBox.Left = Math.Clamp(client.X, 4, Math.Max(4, Width - _textBox.Width - 4));
+        _textBox.Top = Math.Clamp(client.Y, 4, Math.Max(4, Height - _textBox.Height - 4));
+        _textBox.KeyDown += (_, e) =>
+        {
+            if (e.KeyCode == Keys.Enter)
+            {
+                e.SuppressKeyPress = true;
+                EndTextInput(commit: true);
+                Invalidate();
+            }
+            else if (e.KeyCode == Keys.Escape)
+            {
+                e.SuppressKeyPress = true;
+                EndTextInput(commit: false);
+                Invalidate();
+            }
+        };
+        Controls.Add(_textBox);
+        _textBox.BringToFront();
+        _textBox.Focus();
+    }
+
+    private void EndTextInput(bool commit)
+    {
+        if (_textBox == null) return;
+        var text = _textBox.Text;
+        Controls.Remove(_textBox);
+        _textBox.Dispose();
+        _textBox = null;
+        if (commit && !string.IsNullOrWhiteSpace(text))
+            _ann.AddText(_textAt, text);
+    }
+
     private void Cancel()
     {
+        EndTextInput(commit: false);
         Chosen = null;
         DialogResult = DialogResult.Cancel;
         Close();

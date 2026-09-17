@@ -352,6 +352,12 @@ internal sealed class PastePinForm : Form
 
     private void StartOcr()
     {
+        if (!_settings.HasVision)
+        {
+            _ocrFailed = true;
+            return;
+        }
+
         var clone = new Bitmap(_bmp);
         var ct = _ocrCts.Token;
         _ = Task.Run(async () =>
@@ -527,11 +533,13 @@ internal sealed class PastePinForm : Form
         bool hasAny = _page is { HasText: true };
         _copyTextItem.Enabled = hasSel;
         _copyAllTextItem.Enabled = hasAny;
-        _copyAllTextItem.Text = _ocrFailed
-            ? "未识别到文字"
-            : _page is null
-                ? "正在识别文字…"
-                : "复制全部文字";
+        _copyAllTextItem.Text = !_settings.HasVision
+            ? "请先配置 DeepSeek"
+            : _ocrFailed
+                ? "未识别到文字"
+                : _page is null
+                    ? "正在识别文字…"
+                    : "复制全部文字";
     }
 
     private static ToolStripMenuItem Item(string text, Action action)

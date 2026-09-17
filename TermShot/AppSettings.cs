@@ -8,16 +8,16 @@ internal sealed class AppSettings
     public string SaveDirectory { get; set; } = "";
     public uint HotkeyModifiers { get; set; } = NativeMethods.MOD_CONTROL | NativeMethods.MOD_SHIFT;
     public int HotkeyKey { get; set; } = (int)Keys.S;
-    public const string DefaultOllamaHost = "http://127.0.0.1:11434";
-    public const string DefaultOllamaModel = "gemma4:e2b-it-qat";
+    public const string DefaultDeepSeekModel = "deepseek-flash";
 
     public PostCaptureAction PostCaptureAction { get; set; } = PostCaptureAction.Ask;
     public bool QuotePath { get; set; } = true;
     public bool StartWithWindows { get; set; } = true;
-    public bool OllamaOcr { get; set; } = true;
-    public string OllamaHost { get; set; } = DefaultOllamaHost;
-    public string OllamaModel { get; set; } = DefaultOllamaModel;
-    public TranslateTarget TranslateTarget { get; set; } = TranslateTarget.ZhHans;
+    public string DeepSeekApiKey { get; set; } = "";
+    public string DeepSeekModel { get; set; } = DefaultDeepSeekModel;
+
+    [JsonIgnore]
+    public bool HasVision => !string.IsNullOrWhiteSpace(DeepSeekApiKey);
 
     [JsonIgnore]
     public string ResolvedSaveDirectory =>
@@ -50,10 +50,7 @@ internal sealed class AppSettings
                 var json = File.ReadAllText(FilePath);
                 var loaded = JsonSerializer.Deserialize<AppSettings>(json, JsonOptions);
                 if (loaded != null)
-                {
-                    loaded.Normalize();
                     return loaded;
-                }
             }
         }
         catch
@@ -62,12 +59,6 @@ internal sealed class AppSettings
         }
 
         return new AppSettings();
-    }
-
-    private void Normalize()
-    {
-        if (TranslateTarget is not TranslateTarget.ZhHans and not TranslateTarget.English)
-            TranslateTarget = TranslateTarget.ZhHans;
     }
 
     public void Save()
@@ -134,12 +125,6 @@ internal enum PostCaptureAction
     Translate = 6
 }
 
-internal enum TranslateTarget
-{
-    ZhHans = 1,
-    English = 2
-}
-
 internal static class PostCaptureActions
 {
     public static readonly (PostCaptureAction Value, string Text)[] All =
@@ -149,19 +134,10 @@ internal static class PostCaptureActions
         (PostCaptureAction.CopyImage, "复制图片"),
         (PostCaptureAction.CopyPath, "复制保存图片的地址"),
         (PostCaptureAction.Pin, "贴到桌面"),
-        (PostCaptureAction.CopyText, "复制文字（Ollama 识别）"),
+        (PostCaptureAction.CopyText, "复制文字（模型识别）"),
         (PostCaptureAction.Translate, "翻译并复制译文")
     ];
 
     public static bool UsesPath(PostCaptureAction action) =>
         action is PostCaptureAction.Ask or PostCaptureAction.CopyPath;
-}
-
-internal static class TranslateTargets
-{
-    public static readonly (TranslateTarget Value, string Text)[] All =
-    [
-        (TranslateTarget.ZhHans, "中文"),
-        (TranslateTarget.English, "英文")
-    ];
 }

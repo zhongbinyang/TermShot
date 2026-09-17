@@ -276,12 +276,16 @@ internal sealed class TrayContext : ApplicationContext
 
     private void CopyText(Bitmap bmp)
     {
-        var clone = new Bitmap(bmp);
         var settings = _settings;
+        if (!settings.HasVision)
+        {
+            Balloon("无法识别文字", "请先在设置中填写 DeepSeek API Key");
+            return;
+        }
+
+        var clone = new Bitmap(bmp);
         var ui = SynchronizationContext.Current;
-        Balloon("正在识别文字", settings.OllamaOcr
-            ? "Ollama · " + OllamaClient.ModelName(settings)
-            : "系统 OCR");
+        Balloon("正在识别文字", VisionClient.StatusLine(settings));
 
         _ = Task.Run(async () =>
         {
@@ -309,9 +313,7 @@ internal sealed class TrayContext : ApplicationContext
                 if (error != null)
                     Balloon("识别失败", error);
                 else if (string.IsNullOrWhiteSpace(text))
-                    Balloon("未识别到文字", settings.OllamaOcr
-                        ? "确认 ollama serve 已在 " + OllamaClient.NormalizeHost(settings.OllamaHost) + " 运行"
-                        : "系统 OCR 没有读到字");
+                    Balloon("未识别到文字", VisionClient.EmptyHint());
                 else if (!CaptureService.TrySetClipboardText(text))
                     Balloon("复制文字失败", "剪贴板正被占用，请再试一次");
                 else
@@ -327,11 +329,16 @@ internal sealed class TrayContext : ApplicationContext
 
     private void Translate(Bitmap bmp)
     {
-        var clone = new Bitmap(bmp);
         var settings = _settings;
+        if (!settings.HasVision)
+        {
+            Balloon("无法翻译", "请先在设置中填写 DeepSeek API Key");
+            return;
+        }
+
+        var clone = new Bitmap(bmp);
         var ui = SynchronizationContext.Current;
-        Balloon("正在翻译", "Ollama · " + OllamaClient.ModelName(settings)
-            + " · " + TranslateService.TargetLabel(settings.TranslateTarget));
+        Balloon("正在翻译", VisionClient.StatusLine(settings) + " · 目标语言由模型决定");
 
         _ = Task.Run(async () =>
         {
@@ -356,8 +363,7 @@ internal sealed class TrayContext : ApplicationContext
                 if (error != null)
                     Balloon("翻译失败", error);
                 else if (string.IsNullOrWhiteSpace(text))
-                    Balloon("没有译出文字", "确认 ollama serve 已在 "
-                        + OllamaClient.NormalizeHost(settings.OllamaHost) + " 运行");
+                    Balloon("没有译出文字", VisionClient.EmptyHint());
                 else if (!CaptureService.TrySetClipboardText(text))
                     Balloon("复制译文失败", "剪贴板正被占用，请再试一次");
                 else

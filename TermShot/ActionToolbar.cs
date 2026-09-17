@@ -4,7 +4,8 @@ namespace TermShot;
 
 internal sealed class ActionToolbar
 {
-    public const int MaxCount = 10;
+    public const int AnnotCount = 8;
+    public const int MaxCount = 16;
 
     private readonly Rectangle[] _buttons = new Rectangle[MaxCount];
     private readonly Rectangle[] _swatches = new Rectangle[AnnotationSession.Colors.Length];
@@ -15,21 +16,25 @@ internal sealed class ActionToolbar
     public int PressedIndex { get; set; } = -1;
     public int HoverColor { get; private set; } = -1;
     public int HoverWidth { get; private set; } = -1;
-    public bool ArrowActive { get; set; }
+    public bool ShowPalette { get; set; }
+    public bool ShowColor { get; set; } = true;
     public bool UndoEnabled { get; set; }
     public bool ShowScroll { get; set; }
     public int ColorIndex { get; set; }
     public int WidthIndex { get; set; } = 1;
-    public int VisibleCount => ShowScroll ? 10 : 9;
+    public AnnotKind Tool { get; set; } = AnnotKind.Arrow;
+    public AnnotKind ShapeKind { get; set; } = AnnotKind.Rect;
+    public AnnotKind StrokeKind { get; set; } = AnnotKind.Arrow;
+    public int VisibleCount => AnnotCount + (ShowScroll ? 8 : 7);
 
     public void Relayout(Rectangle selection, Rectangle confine, float scale)
     {
         int n = VisibleCount;
         int pad = Sc(6, scale);
-        int btn = Sc(36, scale);
+        int btn = Sc(32, scale);
         int gap = Sc(2, scale);
-        int sep = Sc(10, scale);
-        int pal = ArrowActive ? Sc(30, scale) : 0;
+        int sep = Sc(8, scale);
+        int pal = ShowPalette ? Sc(30, scale) : 0;
         int w = pad * 2 + btn * n + gap * (n - 3) + sep * 2;
         int h = pad * 2 + btn + pal;
         int margin = Sc(8, scale);
@@ -55,30 +60,32 @@ internal sealed class ActionToolbar
         for (int i = 0; i < n; i++)
         {
             _buttons[i] = new Rectangle(bx, by, btn, btn);
-            bx += btn + (i == 1 || i == n - 2 ? sep : gap);
+            bx += btn + (i == AnnotCount - 1 || i == n - 2 ? sep : gap);
         }
         for (int i = n; i < _buttons.Length; i++)
             _buttons[i] = Rectangle.Empty;
 
-        if (ArrowActive)
+        if (ShowPalette)
         {
             int dot = Sc(12, scale);
             int dg = Sc(7, scale);
-            int cn = AnnotationSession.Colors.Length;
+            int cn = ShowColor ? AnnotationSession.Colors.Length : 0;
             int chipW = Sc(22, scale);
             int chipH = Sc(16, scale);
             int wg = Sc(5, scale);
             int wn = AnnotationSession.Widths.Length;
-            int palSep = Sc(12, scale);
-            int rowW = cn * dot + (cn - 1) * dg + palSep + wn * chipW + (wn - 1) * wg;
+            int palSep = cn > 0 ? Sc(12, scale) : 0;
+            int rowW = cn * dot + Math.Max(0, cn - 1) * dg + palSep + wn * chipW + (wn - 1) * wg;
             int sx = x + (w - rowW) / 2;
             int sy = by + btn + Sc(8, scale);
+            Array.Clear(_swatches);
             for (int i = 0; i < cn; i++)
             {
                 _swatches[i] = new Rectangle(sx, sy + (chipH - dot) / 2, dot, dot);
                 sx += dot + dg;
             }
-            sx += palSep - dg;
+            if (cn > 0)
+                sx += palSep - dg;
             for (int i = 0; i < wn; i++)
             {
                 _widths[i] = new Rectangle(sx, sy, chipW, chipH);
@@ -104,7 +111,7 @@ internal sealed class ActionToolbar
 
     public int HitTestColor(Point p)
     {
-        if (!ArrowActive) return -1;
+        if (!ShowPalette || !ShowColor) return -1;
         for (int i = 0; i < _swatches.Length; i++)
         {
             if (_swatches[i].Contains(p))
@@ -115,7 +122,7 @@ internal sealed class ActionToolbar
 
     public int HitTestWidth(Point p)
     {
-        if (!ArrowActive) return -1;
+        if (!ShowPalette) return -1;
         for (int i = 0; i < _widths.Length; i++)
         {
             if (_widths[i].Contains(p))
@@ -136,37 +143,52 @@ internal sealed class ActionToolbar
 
     public ToolbarResult ResultAt(int index)
     {
-        if (!ShowScroll)
-            return ResultOf(index);
-        return index switch
+        if (index < 0) return ToolbarResult.Miss;
+        if (index < AnnotCount)
         {
-            0 => ToolbarResult.Arrow,
-            1 => ToolbarResult.Undo,
-            2 => ToolbarResult.Scroll,
-            3 => ToolbarResult.Pin,
-            4 => ToolbarResult.Save,
-            5 => ToolbarResult.CopyImage,
-            6 => ToolbarResult.CopyPath,
-            7 => ToolbarResult.CopyText,
-            8 => ToolbarResult.Translate,
-            9 => ToolbarResult.Close,
+            return index switch
+            {
+                0 => ToolbarResult.Shape,
+                1 => ToolbarResult.Stroke,
+                2 => ToolbarResult.Pencil,
+                3 => ToolbarResult.Marker,
+                4 => ToolbarResult.Mosaic,
+                5 => ToolbarResult.AnnotText,
+                6 => ToolbarResult.Eraser,
+                7 => ToolbarResult.Undo,
+                _ => ToolbarResult.Miss
+            };
+        }
+
+        int a = index - AnnotCount;
+        if (ShowScroll)
+        {
+            return a switch
+            {
+                0 => ToolbarResult.Scroll,
+                1 => ToolbarResult.Pin,
+                2 => ToolbarResult.Save,
+                3 => ToolbarResult.CopyImage,
+                4 => ToolbarResult.CopyPath,
+                5 => ToolbarResult.CopyText,
+                6 => ToolbarResult.Translate,
+                7 => ToolbarResult.Close,
+                _ => ToolbarResult.Miss
+            };
+        }
+
+        return a switch
+        {
+            0 => ToolbarResult.Pin,
+            1 => ToolbarResult.Save,
+            2 => ToolbarResult.CopyImage,
+            3 => ToolbarResult.CopyPath,
+            4 => ToolbarResult.CopyText,
+            5 => ToolbarResult.Translate,
+            6 => ToolbarResult.Close,
             _ => ToolbarResult.Miss
         };
     }
-
-    public static ToolbarResult ResultOf(int index) => index switch
-    {
-        0 => ToolbarResult.Arrow,
-        1 => ToolbarResult.Undo,
-        2 => ToolbarResult.Pin,
-        3 => ToolbarResult.Save,
-        4 => ToolbarResult.CopyImage,
-        5 => ToolbarResult.CopyPath,
-        6 => ToolbarResult.CopyText,
-        7 => ToolbarResult.Translate,
-        8 => ToolbarResult.Close,
-        _ => ToolbarResult.Miss
-    };
 
     public static PostCaptureAction? ToAction(ToolbarResult r) => r switch
     {
@@ -192,36 +214,30 @@ internal sealed class ActionToolbar
         return true;
     }
 
-    public static string Tip(int i, bool showScroll = false)
+    public string TipAt(int i)
     {
-        if (showScroll)
+        return ResultAt(i) switch
         {
-            return i switch
-            {
-                0 => "箭头标记  ·  A  ·  Shift 直角",
-                1 => "撤销  ·  Z",
-                2 => "滚动截图  ·  R",
-                3 => "贴到桌面  ·  T",
-                4 => "保存图片  ·  S",
-                5 => "复制图片  ·  C",
-                6 => "复制图片地址  ·  P",
-                7 => "复制文字  ·  O",
-                8 => "翻译  ·  L",
-                9 => "取消  ·  Esc",
-                _ => ""
-            };
-        }
-        return i switch
-        {
-            0 => "箭头标记  ·  A  ·  Shift 直角",
-            1 => "撤销  ·  Z",
-            2 => "贴到桌面  ·  T",
-            3 => "保存图片  ·  S",
-            4 => "复制图片  ·  C",
-            5 => "复制图片地址  ·  P",
-            6 => "复制文字  ·  O",
-            7 => "翻译  ·  L",
-            8 => "取消  ·  Esc",
+            ToolbarResult.Shape => ShapeKind == AnnotKind.Ellipse
+                ? "椭圆  ·  Tab 切方框  ·  Shift 正圆"
+                : "方框  ·  Tab 切椭圆  ·  Shift 正方形",
+            ToolbarResult.Stroke => StrokeKind == AnnotKind.Line
+                ? "直线  ·  Tab 切箭头  ·  Shift 45°"
+                : "箭头  ·  A  ·  Tab 切直线  ·  Shift 45°",
+            ToolbarResult.Pencil => "铅笔  ·  B",
+            ToolbarResult.Marker => "荧光笔  ·  H",
+            ToolbarResult.Mosaic => "马赛克  ·  M",
+            ToolbarResult.AnnotText => "文字  ·  X",
+            ToolbarResult.Eraser => "橡皮  ·  E",
+            ToolbarResult.Undo => "撤销  ·  Z",
+            ToolbarResult.Scroll => "滚动截图  ·  R",
+            ToolbarResult.Pin => "贴到桌面  ·  T",
+            ToolbarResult.Save => "保存图片  ·  S",
+            ToolbarResult.CopyImage => "复制图片  ·  C",
+            ToolbarResult.CopyPath => "复制图片地址  ·  P",
+            ToolbarResult.CopyText => "复制文字  ·  O",
+            ToolbarResult.Translate => "翻译  ·  L",
+            ToolbarResult.Close => "取消  ·  Esc",
             _ => ""
         };
     }
@@ -244,13 +260,13 @@ internal sealed class ActionToolbar
             DrawRound(g, border, box, Sc(8, scale));
 
         int n = VisibleCount;
-        DrawSep(g, _buttons[1], _buttons[2], a, scale);
+        DrawSep(g, _buttons[AnnotCount - 1], _buttons[AnnotCount], a, scale);
         DrawSep(g, _buttons[n - 2], _buttons[n - 1], a, scale);
 
         for (int i = 0; i < n; i++)
             PaintButton(g, i, scale, a);
 
-        if (ArrowActive)
+        if (ShowPalette)
             PaintPalette(g, scale, a);
 
         if (HoverWidth >= 0)
@@ -263,6 +279,7 @@ internal sealed class ActionToolbar
 
     private void DrawSep(Graphics g, Rectangle left, Rectangle right, int a, float scale)
     {
+        if (left.Width < 2 || right.Width < 2) return;
         int x = left.Right + (right.Left - left.Right) / 2;
         using var sep = new Pen(Color.FromArgb((int)(50 * (a / 255f)), 255, 255, 255));
         g.DrawLine(sep, x, Bounds.Y + Sc(10, scale), x, left.Bottom - Sc(2, scale));
@@ -270,28 +287,31 @@ internal sealed class ActionToolbar
 
     private void PaintPalette(Graphics g, float scale, int a)
     {
-        for (int i = 0; i < AnnotationSession.Colors.Length; i++)
+        if (ShowColor)
         {
-            var r = _swatches[i];
-            if (r.Width < 2) continue;
-            var c = AnnotationSession.Colors[i];
-            bool on = i == ColorIndex || i == HoverColor;
-            var rr = on ? Rectangle.Inflate(r, 1, 1) : r;
-            using var fill = new SolidBrush(Color.FromArgb(a, c));
-            g.FillEllipse(fill, rr);
-            using var ring = new Pen(
-                i == ColorIndex ? Color.FromArgb(a, Theme.AccentHi) : Color.FromArgb((int)(a * 0.55), 255, 255, 255),
-                i == ColorIndex ? 2f : 1f);
-            g.DrawEllipse(ring, rr);
-        }
+            for (int i = 0; i < AnnotationSession.Colors.Length; i++)
+            {
+                var r = _swatches[i];
+                if (r.Width < 2) continue;
+                var c = AnnotationSession.Colors[i];
+                bool on = i == ColorIndex || i == HoverColor;
+                var rr = on ? Rectangle.Inflate(r, 1, 1) : r;
+                using var fill = new SolidBrush(Color.FromArgb(a, c));
+                g.FillEllipse(fill, rr);
+                using var ring = new Pen(
+                    i == ColorIndex ? Color.FromArgb(a, Theme.AccentHi) : Color.FromArgb((int)(a * 0.55), 255, 255, 255),
+                    i == ColorIndex ? 2f : 1f);
+                g.DrawEllipse(ring, rr);
+            }
 
-        if (_swatches[0].Width > 1 && _widths[0].Width > 1)
-        {
-            int x = (_swatches[^1].Right + _widths[0].Left) / 2;
-            int top = _widths[0].Y + 2;
-            int bot = _widths[0].Bottom - 2;
-            using var sep = new Pen(Color.FromArgb((int)(a * 0.22), 255, 255, 255));
-            g.DrawLine(sep, x, top, x, bot);
+            if (_swatches[0].Width > 1 && _widths[0].Width > 1)
+            {
+                int x = (_swatches[^1].Right + _widths[0].Left) / 2;
+                int top = _widths[0].Y + 2;
+                int bot = _widths[0].Bottom - 2;
+                using var sep = new Pen(Color.FromArgb((int)(a * 0.22), 255, 255, 255));
+                g.DrawLine(sep, x, top, x, bot);
+            }
         }
 
         for (int i = 0; i < AnnotationSession.Widths.Length; i++)
@@ -350,7 +370,7 @@ internal sealed class ActionToolbar
         var kind = ResultAt(i);
         bool hover = HoverIndex == i;
         bool pressed = PressedIndex == i;
-        bool checkedOn = kind == ToolbarResult.Arrow && ArrowActive;
+        bool checkedOn = IsChecked(kind);
         bool dim = kind == ToolbarResult.Undo && !UndoEnabled;
         bool close = kind == ToolbarResult.Close;
         if (hover || pressed || checkedOn)
@@ -369,7 +389,7 @@ internal sealed class ActionToolbar
                 : hover || checkedOn
                     ? Color.FromArgb(a, Theme.AccentHi)
                     : Color.FromArgb((int)(a * 0.92), Theme.Text);
-        using var pen = new Pen(color, Math.Max(1.4f, 1.7f * scale))
+        using var pen = new Pen(color, Math.Max(1.3f, 1.55f * scale))
         {
             StartCap = LineCap.Round,
             EndCap = LineCap.Round,
@@ -378,7 +398,19 @@ internal sealed class ActionToolbar
         var icon = IconBox(r);
         switch (kind)
         {
-            case ToolbarResult.Arrow: DrawArrowIcon(g, icon, pen, color); break;
+            case ToolbarResult.Shape:
+                if (ShapeKind == AnnotKind.Ellipse) DrawEllipseIcon(g, icon, pen);
+                else DrawRectIcon(g, icon, pen);
+                break;
+            case ToolbarResult.Stroke:
+                if (StrokeKind == AnnotKind.Line) DrawLineIcon(g, icon, pen);
+                else DrawArrowIcon(g, icon, pen, color);
+                break;
+            case ToolbarResult.Pencil: DrawPencil(g, icon, pen); break;
+            case ToolbarResult.Marker: DrawMarker(g, icon, pen, color); break;
+            case ToolbarResult.Mosaic: DrawMosaic(g, icon, pen, color); break;
+            case ToolbarResult.AnnotText: DrawLetter(g, icon, color); break;
+            case ToolbarResult.Eraser: DrawEraser(g, icon, pen); break;
             case ToolbarResult.Undo: DrawUndo(g, icon, pen); break;
             case ToolbarResult.Scroll: DrawScroll(g, icon, pen); break;
             case ToolbarResult.Pin: DrawPin(g, icon, pen); break;
@@ -391,9 +423,22 @@ internal sealed class ActionToolbar
         }
     }
 
+    private bool IsChecked(ToolbarResult kind) => kind switch
+    {
+        ToolbarResult.Shape => Tool is AnnotKind.Rect or AnnotKind.Ellipse,
+        ToolbarResult.Stroke => Tool is AnnotKind.Line or AnnotKind.Arrow,
+        ToolbarResult.Pencil => Tool == AnnotKind.Pencil,
+        ToolbarResult.Marker => Tool == AnnotKind.Marker,
+        ToolbarResult.Mosaic => Tool == AnnotKind.Mosaic,
+        ToolbarResult.AnnotText => Tool == AnnotKind.Text,
+        ToolbarResult.Eraser => Tool == AnnotKind.Eraser,
+        _ => false
+    };
+
     private void PaintTip(Graphics g, int i, float scale, float alpha)
     {
-        var text = Tip(i, ShowScroll);
+        var text = TipAt(i);
+        if (text.Length == 0) return;
         var size = TextRenderer.MeasureText(text, Theme.UiSmall, new Size(int.MaxValue, int.MaxValue),
             TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
         int tw = size.Width + Sc(14, scale);
@@ -412,7 +457,7 @@ internal sealed class ActionToolbar
 
     private static RectangleF IconBox(Rectangle btn)
     {
-        float s = Math.Min(btn.Width, btn.Height) * 0.44f;
+        float s = Math.Min(btn.Width, btn.Height) * 0.46f;
         return new RectangleF(btn.X + (btn.Width - s) / 2f, btn.Y + (btn.Height - s) / 2f, s, s);
     }
 
@@ -420,7 +465,90 @@ internal sealed class ActionToolbar
     {
         var from = new PointF(r.X + r.Width * 0.08f, r.Bottom - r.Height * 0.08f);
         var to = new PointF(r.Right - r.Width * 0.06f, r.Y + r.Height * 0.08f);
-        AnnotationSession.PaintArrow(g, from, to, fill, Math.Max(1.6f, pen.Width));
+        AnnotationSession.PaintArrow(g, from, to, fill, Math.Max(1.5f, pen.Width));
+    }
+
+    private static void DrawRectIcon(Graphics g, RectangleF r, Pen pen)
+    {
+        var box = RectangleF.Inflate(r, -r.Width * 0.08f, -r.Height * 0.12f);
+        g.DrawRectangle(pen, box.X, box.Y, box.Width, box.Height);
+    }
+
+    private static void DrawEllipseIcon(Graphics g, RectangleF r, Pen pen)
+    {
+        var box = RectangleF.Inflate(r, -r.Width * 0.06f, -r.Height * 0.10f);
+        g.DrawEllipse(pen, box);
+    }
+
+    private static void DrawLineIcon(Graphics g, RectangleF r, Pen pen)
+    {
+        g.DrawLine(pen, r.X + r.Width * 0.08f, r.Bottom - r.Height * 0.12f,
+            r.Right - r.Width * 0.08f, r.Y + r.Height * 0.12f);
+    }
+
+    private static void DrawPencil(Graphics g, RectangleF r, Pen pen)
+    {
+        var body = new[]
+        {
+            new PointF(r.X + r.Width * 0.22f, r.Bottom - r.Height * 0.08f),
+            new PointF(r.X + r.Width * 0.08f, r.Bottom - r.Height * 0.28f),
+            new PointF(r.Right - r.Width * 0.28f, r.Y + r.Height * 0.12f),
+            new PointF(r.Right - r.Width * 0.08f, r.Y + r.Height * 0.32f)
+        };
+        g.DrawPolygon(pen, body);
+        g.DrawLine(pen, r.X + r.Width * 0.18f, r.Bottom - r.Height * 0.18f,
+            r.X + r.Width * 0.32f, r.Bottom - r.Height * 0.08f);
+    }
+
+    private static void DrawMarker(Graphics g, RectangleF r, Pen pen, Color color)
+    {
+        using var fill = new SolidBrush(Color.FromArgb(90, color));
+        using var thick = new Pen(Color.FromArgb(160, color), Math.Max(3.2f, pen.Width * 2.2f))
+        {
+            StartCap = LineCap.Round,
+            EndCap = LineCap.Round
+        };
+        g.DrawLine(thick, r.X + r.Width * 0.08f, r.Bottom - r.Height * 0.28f,
+            r.Right - r.Width * 0.08f, r.Y + r.Height * 0.28f);
+        g.DrawLine(pen, r.X + r.Width * 0.12f, r.Bottom - r.Height * 0.12f,
+            r.Right - r.Width * 0.12f, r.Y + r.Height * 0.12f);
+        _ = fill;
+    }
+
+    private static void DrawMosaic(Graphics g, RectangleF r, Pen pen, Color color)
+    {
+        float s = r.Width / 2.15f;
+        using var a = new SolidBrush(Color.FromArgb(180, color));
+        using var b = new SolidBrush(Color.FromArgb(70, color));
+        g.FillRectangle(a, r.X, r.Y, s, s);
+        g.FillRectangle(b, r.X + s, r.Y, s, s);
+        g.FillRectangle(b, r.X, r.Y + s, s, s);
+        g.FillRectangle(a, r.X + s, r.Y + s, s, s);
+        g.DrawRectangle(pen, r.X, r.Y, s * 2, s * 2);
+    }
+
+    private static void DrawLetter(Graphics g, RectangleF r, Color color)
+    {
+        var hint = g.TextRenderingHint;
+        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+        float px = Math.Max(9f, r.Height * 0.78f);
+        using var font = new Font("Segoe UI", px, FontStyle.Bold, GraphicsUnit.Pixel);
+        using var brush = new SolidBrush(color);
+        g.DrawString("T", font, brush, r.X + r.Width * 0.08f, r.Y - r.Height * 0.18f);
+        g.TextRenderingHint = hint;
+    }
+
+    private static void DrawEraser(Graphics g, RectangleF r, Pen pen)
+    {
+        var body = new[]
+        {
+            new PointF(r.X + r.Width * 0.12f, r.Y + r.Height * 0.42f),
+            new PointF(r.X + r.Width * 0.42f, r.Y + r.Height * 0.08f),
+            new PointF(r.Right - r.Width * 0.08f, r.Y + r.Height * 0.38f),
+            new PointF(r.Right - r.Width * 0.38f, r.Bottom - r.Height * 0.08f)
+        };
+        g.DrawPolygon(pen, body);
+        g.DrawLine(pen, body[0], body[3]);
     }
 
     private static void DrawPin(Graphics g, RectangleF r, Pen pen)

@@ -26,6 +26,8 @@ internal sealed class OverlayForm : Form
     private WindowInfo? _hover;
     private System.Windows.Forms.Timer? _toolbarAnim;
     private float _toolbarAlpha;
+    private TextBox? _textBox;
+    private PointF _textAt;
 
     public Rectangle? SelectedScreenRect { get; private set; }
     public PostCaptureAction? ChosenAction { get; private set; }
@@ -59,6 +61,8 @@ internal sealed class OverlayForm : Form
 
         _cursorBmp = ScreenToBmp(Cursor.Position);
         _hover = WindowEnumerator.HitTest(_windows, BmpToScreen(_cursorBmp));
+        _ann.Attach(_shot);
+        FormClosed += (_, _) => EndTextInput(commit: false);
     }
 
     protected override CreateParams CreateParams
@@ -106,12 +110,25 @@ internal sealed class OverlayForm : Form
         base.WndProc(ref m);
     }
 
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+            _ann.Dispose();
+        base.Dispose(disposing);
+    }
+
     protected override bool ProcessDialogKey(Keys keyData)
     {
         var key = keyData & Keys.KeyCode;
         if (key == Keys.Escape)
         {
-            if (_awaitingAction && _ann.Draft != null)
+            if (_textBox != null)
+            {
+                EndTextInput(commit: false);
+                Invalidate();
+                return true;
+            }
+            if (_awaitingAction && _ann.HasDraft)
             {
                 _ann.CancelDraft();
                 Invalidate();
@@ -120,6 +137,8 @@ internal sealed class OverlayForm : Form
             Cancel();
             return true;
         }
+        if (_textBox != null)
+            return false;
         if (key == Keys.R)
         {
             TryBeginScroll();
@@ -127,9 +146,45 @@ internal sealed class OverlayForm : Form
         }
         if (_awaitingAction)
         {
+            if (key == Keys.Tab)
+            {
+                _ann.CycleTab();
+                Invalidate();
+                return true;
+            }
             if (key == Keys.A)
             {
-                _ann.ArrowTool = !_ann.ArrowTool;
+                _ann.Toggle(AnnotKind.Arrow);
+                Invalidate();
+                return true;
+            }
+            if (key == Keys.B)
+            {
+                _ann.Toggle(AnnotKind.Pencil);
+                Invalidate();
+                return true;
+            }
+            if (key == Keys.H)
+            {
+                _ann.Toggle(AnnotKind.Marker);
+                Invalidate();
+                return true;
+            }
+            if (key == Keys.M)
+            {
+                _ann.Toggle(AnnotKind.Mosaic);
+                Invalidate();
+                return true;
+            }
+            if (key == Keys.X)
+            {
+                _ann.Toggle(AnnotKind.Text);
+                Invalidate();
+                return true;
+            }
+            if (key == Keys.E)
+            {
+                _ann.Toggle(AnnotKind.Eraser);
                 Invalidate();
                 return true;
             }
@@ -192,7 +247,7 @@ internal sealed class OverlayForm : Form
         _cursorBmp = ClientToBmp(e.Location);
         if (_awaitingAction)
         {
-            if (_ann.Draft != null)
+            if (_ann.HasDraft)
             {
                 _ann.Move(ClampToSelection(_cursorBmp), snap45: ModifierKeys.HasFlag(Keys.Shift));
                 Invalidate();
@@ -222,7 +277,7 @@ internal sealed class OverlayForm : Form
     {
         if (e.Button == MouseButtons.Right)
         {
-            if (_awaitingAction && _ann.Draft != null)
+            if (_awaitingAction && _ann.HasDraft)
             {
                 _ann.CancelDraft();
                 Invalidate();
@@ -252,15 +307,28 @@ internal sealed class OverlayForm : Form
                 }
                 if (hit is not ToolbarResult.Miss)
                 {
+                    if (_textBox != null)
+                        EndTextInput(commit: true);
                     _toolbar.PressedIndex = _toolbar.HitTest(e.Location);
                     if (_toolbar.PressedIndex >= 0)
                         Invalidate();
                     return;
                 }
-                if (_ann.ArrowTool)
+                if (_textBox != null)
                 {
-                    _cursorBmp = ClientToBmp(e.Location);
-                    _ann.Begin(ClampToSelection(_cursorBmp));
+                    EndTextInput(commit: true);
+                    Invalidate();
+                }
+                _cursorBmp = ClientToBmp(e.Location);
+                var at = ClampToSelection(_cursorBmp);
+                if (_ann.IsTextTool)
+                {
+                    BeginTextAt(at);
+                    return;
+                }
+                if (_ann.CanDraw)
+                {
+                    _ann.Begin(at);
                     Cursor = Cursors.Cross;
                     Invalidate();
                 }
@@ -279,7 +347,7 @@ internal sealed class OverlayForm : Form
     {
         if (e.Button == MouseButtons.Left && _awaitingAction)
         {
-            if (_ann.Draft != null)
+            if (_ann.HasDraft)
             {
                 _ann.Move(ClampToSelection(ClientToBmp(e.Location)), snap45: ModifierKeys.HasFlag(Keys.Shift));
                 _ann.CommitDraft();
@@ -613,7 +681,7 @@ internal sealed class OverlayForm : Form
         _dragConfirmed = false;
         _lockedBmpRect = ScreenRectToBmp(screenRect);
         _ann.WidthIndex = 1;
-        _ann.ArrowTool = true;
+        _ann.Select(AnnotKind.Arrow);
         Capture = true;
         Cursor = Cursors.Cross;
         _toolbarAlpha = 0f;
@@ -653,8 +721,12 @@ internal sealed class OverlayForm : Form
 
     private void SyncToolbar()
     {
-        _toolbar.ArrowActive = _ann.ArrowTool;
-        _toolbar.UndoEnabled = _ann.HasMarks || _ann.Draft != null;
+        _toolbar.Tool = _ann.Tool;
+        _toolbar.ShapeKind = _ann.ShapeKind;
+        _toolbar.StrokeKind = _ann.StrokeKind;
+        _toolbar.ShowPalette = _ann.ShowPalette;
+        _toolbar.ShowColor = _ann.ShowColor;
+        _toolbar.UndoEnabled = _ann.HasMarks || _ann.HasDraft || _textBox != null;
         _toolbar.ColorIndex = _ann.ColorIndex;
         _toolbar.WidthIndex = _ann.WidthIndex;
     }
@@ -662,13 +734,10 @@ internal sealed class OverlayForm : Form
     private void DrawAnnotations(Graphics g, Rectangle bmpRect, Rectangle clientRect)
     {
         if (!_awaitingAction) return;
-        float sx = clientRect.Width / (float)Math.Max(1, bmpRect.Width);
-        float sy = clientRect.Height / (float)Math.Max(1, bmpRect.Height);
         var state = g.Save();
         g.SetClip(clientRect);
-        _ann.Paint(g, p => new PointF(
-            clientRect.X + (p.X - bmpRect.X) * sx,
-            clientRect.Y + (p.Y - bmpRect.Y) * sy), (sx + sy) * 0.5f);
+        g.CompositingMode = CompositingMode.SourceOver;
+        _ann.Paint(g, bmpRect, clientRect);
         g.Restore(state);
     }
 
@@ -688,18 +757,50 @@ internal sealed class OverlayForm : Form
             return Cursors.Hand;
         if (hit is ToolbarResult.Chrome)
             return Cursors.Default;
-        return _ann.ArrowTool ? Cursors.Cross : Cursors.Default;
+        return _ann.ToolActive ? Cursors.Cross : Cursors.Default;
     }
 
     private void ApplyToolbar(ToolbarResult result)
     {
         switch (result)
         {
-            case ToolbarResult.Arrow:
-                _ann.ArrowTool = !_ann.ArrowTool;
+            case ToolbarResult.Shape:
+                EndTextInput(commit: true);
+                _ann.ToggleShape();
+                Invalidate();
+                break;
+            case ToolbarResult.Stroke:
+                EndTextInput(commit: true);
+                _ann.ToggleStroke();
+                Invalidate();
+                break;
+            case ToolbarResult.Pencil:
+                EndTextInput(commit: true);
+                _ann.Toggle(AnnotKind.Pencil);
+                Invalidate();
+                break;
+            case ToolbarResult.Marker:
+                EndTextInput(commit: true);
+                _ann.Toggle(AnnotKind.Marker);
+                Invalidate();
+                break;
+            case ToolbarResult.Mosaic:
+                EndTextInput(commit: true);
+                _ann.Toggle(AnnotKind.Mosaic);
+                Invalidate();
+                break;
+            case ToolbarResult.AnnotText:
+                EndTextInput(commit: true);
+                _ann.Toggle(AnnotKind.Text);
+                Invalidate();
+                break;
+            case ToolbarResult.Eraser:
+                EndTextInput(commit: true);
+                _ann.Toggle(AnnotKind.Eraser);
                 Invalidate();
                 break;
             case ToolbarResult.Undo:
+                EndTextInput(commit: false);
                 if (_ann.Undo()) Invalidate();
                 break;
             case ToolbarResult.Close:
@@ -717,6 +818,7 @@ internal sealed class OverlayForm : Form
 
     private void Choose(PostCaptureAction action)
     {
+        EndTextInput(commit: true);
         _ann.CommitDraft();
         ChosenAction = action;
         RestoreForeground();
@@ -742,6 +844,7 @@ internal sealed class OverlayForm : Form
 
     private void ChooseScroll(Rectangle? screenRect = null)
     {
+        EndTextInput(commit: false);
         var rect = screenRect ?? SelectedScreenRect;
         if (rect is not { } r)
             return;
@@ -758,12 +861,64 @@ internal sealed class OverlayForm : Form
 
     private void Cancel()
     {
+        EndTextInput(commit: false);
         SelectedScreenRect = null;
         ChosenAction = null;
         ScrollCapture = false;
         RestoreForeground();
         DialogResult = DialogResult.Cancel;
         Close();
+    }
+
+    private void BeginTextAt(PointF bmpPt)
+    {
+        EndTextInput(commit: true);
+        _textAt = bmpPt;
+        var client = BmpToClient(new Point((int)Math.Round(bmpPt.X), (int)Math.Round(bmpPt.Y)));
+        float px = Math.Clamp(_ann.Width * 3.4f, 12f, 26f);
+        _textBox = new TextBox
+        {
+            BorderStyle = BorderStyle.FixedSingle,
+            BackColor = Color.FromArgb(0x12, 0x18, 0x22),
+            ForeColor = _ann.Color,
+            Font = new Font("Segoe UI", px, FontStyle.Bold, GraphicsUnit.Pixel),
+            Width = Math.Max(160, (int)(220 * DeviceDpi / 96f)),
+            ImeMode = ImeMode.On
+        };
+        _textBox.Left = Math.Clamp(client.X, 8, Math.Max(8, ClientSize.Width - _textBox.Width - 8));
+        _textBox.Top = Math.Clamp(client.Y, 8, Math.Max(8, ClientSize.Height - _textBox.Height - 8));
+        _textBox.KeyDown += (_, e) =>
+        {
+            if (e.KeyCode == Keys.Enter)
+            {
+                e.SuppressKeyPress = true;
+                EndTextInput(commit: true);
+                Invalidate();
+            }
+            else if (e.KeyCode == Keys.Escape)
+            {
+                e.SuppressKeyPress = true;
+                EndTextInput(commit: false);
+                Invalidate();
+            }
+        };
+        Controls.Add(_textBox);
+        Capture = false;
+        _textBox.BringToFront();
+        _textBox.Focus();
+    }
+
+    private void EndTextInput(bool commit)
+    {
+        if (_textBox == null) return;
+        var text = _textBox.Text;
+        Controls.Remove(_textBox);
+        _textBox.Dispose();
+        _textBox = null;
+        if (commit && !string.IsNullOrWhiteSpace(text))
+            _ann.AddText(_textAt, text);
+        if (!IsDisposed)
+            Capture = true;
     }
 
     private void RestoreForeground()
