@@ -9,12 +9,13 @@ use windows::Win32::Graphics::Gdi::{
     BeginPaint, CombineRgn, CreateRectRgn, DeleteObject, EndPaint, InvalidateRect, SetWindowRgn,
     PAINTSTRUCT, RGN_OR,
 };
-use windows::Win32::UI::Input::KeyboardAndMouse::{VK_ESCAPE, VK_RETURN};
+use windows::Win32::UI::Input::KeyboardAndMouse::{VK_ESCAPE, VK_RETURN, VK_SPACE};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect, GetWindowLongPtrW,
-    PeekMessageW, RegisterClassExW, SetWindowLongPtrW, TranslateMessage, CS_DBLCLKS, GWLP_USERDATA,
-    MSG, PM_REMOVE, WM_DESTROY, WM_LBUTTONDOWN, WM_MOUSEMOVE, WM_PAINT, WM_RBUTTONDOWN, WNDCLASSEXW,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
+    LoadCursorW, PeekMessageW, RegisterClassExW, SetCursor, SetWindowLongPtrW, TranslateMessage,
+    CS_DBLCLKS, GWLP_USERDATA, IDC_HAND, MSG, PM_REMOVE, WM_DESTROY, WM_LBUTTONDOWN, WM_MOUSEMOVE,
+    WM_PAINT, WM_RBUTTONDOWN, WM_SETCURSOR, WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
 };
 
 pub const MAX_HEIGHT: i32 = 32000;
@@ -22,17 +23,20 @@ pub const MAX_HEIGHT: i32 = 32000;
 pub enum HudDecision {
     Finish,
     Cancel,
+    ToggleAuto,
 }
 
 struct Hud {
     region: Rect,
     vs: Rect,
     height: i32,
+    auto_scroll: bool,
     hole: Rect,
     bar: Rect,
-    done: Rect,
-    cancel: Rect,
-    hover: i32,
+    auto_btn: Rect,
+    done_btn: Rect,
+    cancel_btn: Rect,
+    hover: i32, // -1: none, 0: auto_btn, 1: done_btn, 2: cancel_btn
     decision: Option<HudDecision>,
 }
 
@@ -47,10 +51,12 @@ pub fn run_scroll(region: Rect) -> Option<Bitmap> {
         region,
         vs,
         height: region.h,
+        auto_scroll: false,
         hole: Rect::default(),
         bar: Rect::default(),
-        done: Rect::default(),
-        cancel: Rect::default(),
+        auto_btn: Rect::default(),
+        done_btn: Rect::default(),
+        cancel_btn: Rect::default(),
         hover: -1,
         decision: None,
     });
@@ -81,8 +87,11 @@ pub fn run_scroll(region: Rect) -> Option<Bitmap> {
             Some(hud.as_mut() as *mut Hud as *mut _),
         )
         .unwrap_or_default();
+
+        // Calculate layout and window region once at initialization, avoiding SetWindowRgn inside WM_PAINT
+        hud.layout(hwnd);
         place_topmost(hwnd, vs, false);
-        crate::native::sleep_ms(160);
+        crate::native::sleep_ms(120);
 
         let first = crate::bitmap::capture_rect(region).ok()?;
         let mut session = Stitcher::new();
@@ -90,24 +99,40 @@ pub fn run_scroll(region: Rect) -> Option<Bitmap> {
         hud.height = session.height();
         let _ = InvalidateRect(hwnd, None, false);
 
-        while key_down(VK_RETURN.0 as i32) || key_down(VK_ESCAPE.0 as i32) || key_down(0x52) {
+        // Drain any lingering initial keys
+        while key_down(VK_RETURN.0 as i32) || key_down(VK_ESCAPE.0 as i32) || key_down(0x52) || key_down(VK_SPACE.0 as i32) {
             crate::native::sleep_ms(20);
             pump();
         }
+
+        let mut auto_scroll = false;
+        let mut last_wheel_time = std::time::Instant::now();
+        let mut auto_still_count = 0;
+        let mut last_capture_time = std::time::Instant::now();
 
         loop {
             pump();
             if hwnd.is_invalid() {
                 break;
             }
-            match &hud.decision {
+
+            // Handle HUD decisions from user clicks
+            match hud.decision.take() {
                 Some(HudDecision::Cancel) => {
                     let _ = DestroyWindow(hwnd);
                     return None;
                 }
                 Some(HudDecision::Finish) => break,
+                Some(HudDecision::ToggleAuto) => {
+                    auto_scroll = !auto_scroll;
+                    hud.auto_scroll = auto_scroll;
+                    auto_still_count = 0;
+                    let _ = InvalidateRect(hwnd, None, false);
+                }
                 None => {}
             }
+
+            // Keyboard shortcuts
             if key_down(VK_ESCAPE.0 as i32) {
                 let _ = DestroyWindow(hwnd);
                 return None;
@@ -115,17 +140,48 @@ pub fn run_scroll(region: Rect) -> Option<Bitmap> {
             if key_down(VK_RETURN.0 as i32) {
                 break;
             }
+            if key_down(VK_SPACE.0 as i32) {
+                auto_scroll = !auto_scroll;
+                hud.auto_scroll = auto_scroll;
+                auto_still_count = 0;
+                let _ = InvalidateRect(hwnd, None, false);
+                while key_down(VK_SPACE.0 as i32) {
+                    crate::native::sleep_ms(20);
+                    pump();
+                }
+            }
+
             if session.height() >= MAX_HEIGHT {
                 break;
             }
-            if let Ok(frame) = crate::bitmap::capture_rect(region) {
-                if session.append(&frame) {
-                    hud.height = session.height();
-                    let _ = InvalidateRect(hwnd, None, false);
+
+            // Send wheel event if auto-scroll is enabled
+            if auto_scroll && last_wheel_time.elapsed() >= std::time::Duration::from_millis(130) {
+                crate::native::send_wheel(-120);
+                last_wheel_time = std::time::Instant::now();
+            }
+
+            // Capture and incrementally stitch frame
+            if last_capture_time.elapsed() >= std::time::Duration::from_millis(50) {
+                last_capture_time = std::time::Instant::now();
+                if let Ok(frame) = crate::bitmap::capture_rect(region) {
+                    if session.append(&frame) {
+                        hud.height = session.height();
+                        auto_still_count = 0;
+                        let _ = InvalidateRect(hwnd, None, false);
+                    } else if auto_scroll && last_wheel_time.elapsed() >= std::time::Duration::from_millis(110) {
+                        auto_still_count += 1;
+                        if auto_still_count >= 8 {
+                            // Reached bottom of page during auto-scroll
+                            break;
+                        }
+                    }
                 }
             }
-            crate::native::sleep_ms(80);
+
+            crate::native::sleep_ms(15);
         }
+
         let _ = DestroyWindow(hwnd);
         Some(session.take())
     }
@@ -154,48 +210,81 @@ unsafe extern "system" fn hud_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
     let hud = &mut *ptr;
     match msg {
         WM_PAINT => {
-            hud.layout(hwnd);
             let mut ps = PAINTSTRUCT::default();
             let hdc = BeginPaint(hwnd, &mut ps);
             let scale = dpi_scale_hwnd(hwnd).max(1.0);
             fill_rect_hdc(hdc, hud.hole.inflate(4, 4), Color::argb(220, 8, 10, 14));
             stroke_rect_hdc(hdc, hud.hole, theme::ACCENT, sc(2, scale).max(1));
+
             if hud.bar.w > 4 && hud.bar.h > 4 {
                 let mut frame = Bitmap::new(hud.bar.w, hud.bar.h);
-                fill_rect(
-                    &mut frame,
-                    0,
-                    0,
-                    hud.bar.w,
-                    hud.bar.h,
-                    Color::argb(242, 18, 22, 30),
-                );
+                // Background
+                fill_rect(&mut frame, 0, 0, hud.bar.w, hud.bar.h, Color::argb(246, 20, 26, 36));
+
+                // Status text
+                let status_msg = format!("高度: {} px  (空格自动滚 / 滚轮手动)", hud.height);
                 crate::draw::draw_text(
                     &mut frame,
-                    Point::new(sc(10, scale), (hud.bar.h - sc(16, scale)) / 2),
-                    &format!("用滚轮向下滚  高度 {} px  ·  Enter 完成  ·  Esc 取消", hud.height),
+                    Point::new(sc(12, scale), (hud.bar.h - sc(15, scale)) / 2),
+                    &status_msg,
                     theme::TEXT,
-                    sc(13, scale),
+                    sc(12, scale),
                 );
-                let done_c = if hud.hover == 0 {
+
+                // Auto-scroll toggle button
+                let auto_bg = if hud.auto_scroll {
+                    Color::argb(255, 45, 125, 95)
+                } else if hud.hover == 0 {
+                    Color::argb(255, 42, 54, 70)
+                } else {
+                    Color::argb(255, 28, 36, 48)
+                };
+                let auto_rx = hud.auto_btn.x - hud.bar.x;
+                let auto_ry = hud.auto_btn.y - hud.bar.y;
+                fill_rect(&mut frame, auto_rx, auto_ry, hud.auto_btn.w, hud.auto_btn.h, auto_bg);
+                let auto_text = if hud.auto_scroll { "⏸ 暂停" } else { "▶ 自动滚" };
+                crate::draw::draw_text(
+                    &mut frame,
+                    Point::new(auto_rx + sc(10, scale), auto_ry + sc(5, scale)),
+                    auto_text,
+                    if hud.auto_scroll { theme::ACCENT_HI } else { theme::TEXT },
+                    sc(12, scale),
+                );
+
+                // Done button (Accent CTA)
+                let done_bg = if hud.hover == 1 {
                     theme::ACCENT_HI
                 } else {
-                    theme::TEXT
+                    theme::ACCENT
                 };
+                let done_rx = hud.done_btn.x - hud.bar.x;
+                let done_ry = hud.done_btn.y - hud.bar.y;
+                fill_rect(&mut frame, done_rx, done_ry, hud.done_btn.w, hud.done_btn.h, done_bg);
                 crate::draw::draw_text(
                     &mut frame,
-                    Point::new(hud.done.x - hud.bar.x + sc(12, scale), hud.done.y - hud.bar.y + sc(6, scale)),
-                    "完成",
-                    done_c,
-                    sc(13, scale),
+                    Point::new(done_rx + sc(12, scale), done_ry + sc(5, scale)),
+                    "✓ 完成",
+                    Color::rgb(0x06, 0x22, 0x1B),
+                    sc(12, scale),
                 );
+
+                // Cancel button
+                let cancel_bg = if hud.hover == 2 {
+                    Color::argb(255, 42, 54, 70)
+                } else {
+                    Color::argb(255, 28, 36, 48)
+                };
+                let cancel_rx = hud.cancel_btn.x - hud.bar.x;
+                let cancel_ry = hud.cancel_btn.y - hud.bar.y;
+                fill_rect(&mut frame, cancel_rx, cancel_ry, hud.cancel_btn.w, hud.cancel_btn.h, cancel_bg);
                 crate::draw::draw_text(
                     &mut frame,
-                    Point::new(hud.cancel.x - hud.bar.x + sc(12, scale), hud.cancel.y - hud.bar.y + sc(6, scale)),
-                    "取消",
+                    Point::new(cancel_rx + sc(12, scale), cancel_ry + sc(5, scale)),
+                    "✕ 取消",
                     theme::TEXT,
-                    sc(13, scale),
+                    sc(12, scale),
                 );
+
                 frame.blit_to_hdc(hdc, hud.bar);
             }
             let _ = EndPaint(hwnd, &ps);
@@ -203,10 +292,12 @@ unsafe extern "system" fn hud_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
         }
         WM_MOUSEMOVE => {
             let p = lp(lparam);
-            let h = if hud.done.contains(p) {
+            let h = if hud.auto_btn.contains(p) {
                 0
-            } else if hud.cancel.contains(p) {
+            } else if hud.done_btn.contains(p) {
                 1
+            } else if hud.cancel_btn.contains(p) {
+                2
             } else {
                 -1
             };
@@ -218,9 +309,11 @@ unsafe extern "system" fn hud_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
         }
         WM_LBUTTONDOWN => {
             let p = lp(lparam);
-            if hud.done.contains(p) {
+            if hud.auto_btn.contains(p) {
+                hud.decision = Some(HudDecision::ToggleAuto);
+            } else if hud.done_btn.contains(p) {
                 hud.decision = Some(HudDecision::Finish);
-            } else if hud.cancel.contains(p) {
+            } else if hud.cancel_btn.contains(p) {
                 hud.decision = Some(HudDecision::Cancel);
             }
             LRESULT(0)
@@ -228,6 +321,18 @@ unsafe extern "system" fn hud_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
         WM_RBUTTONDOWN => {
             hud.decision = Some(HudDecision::Cancel);
             LRESULT(0)
+        }
+        WM_SETCURSOR => {
+            let cur = crate::native::cursor_pos();
+            let mut pt = windows::Win32::Foundation::POINT { x: cur.x, y: cur.y };
+            let _ = windows::Win32::Graphics::Gdi::ScreenToClient(hwnd, &mut pt);
+            let p = Point::new(pt.x, pt.y);
+            if hud.auto_btn.contains(p) || hud.done_btn.contains(p) || hud.cancel_btn.contains(p) {
+                let cursor = LoadCursorW(None, IDC_HAND).unwrap_or_default();
+                SetCursor(cursor);
+                return LRESULT(1);
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         WM_DESTROY => LRESULT(0),
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
@@ -255,10 +360,11 @@ impl Hud {
         let y2 = (self.region.bottom() - self.vs.y) * ch / vh;
         self.hole = Rect::from_ltrb(x1, y1, x2.max(x1 + 1), y2.max(y1 + 1));
         let scale = dpi_scale_hwnd(hwnd).max(1.0);
-        let bar_h = sc(36, scale);
+        let bar_h = sc(40, scale);
         let pad = sc(8, scale);
         let btn_w = sc(68, scale);
-        let bar_w = sc(420, scale);
+        let auto_btn_w = sc(84, scale);
+        let bar_w = sc(470, scale);
         let mut x = self.hole.x + (self.hole.w - bar_w) / 2;
         let mut y = self.hole.bottom() + pad;
         if y + bar_h > ch - 4 {
@@ -267,8 +373,13 @@ impl Hud {
         x = x.clamp(4, (cw - bar_w - 4).max(4));
         y = y.clamp(4, (ch - bar_h - 4).max(4));
         self.bar = Rect::new(x, y, bar_w, bar_h);
-        self.done = Rect::new(self.bar.right() - pad - btn_w, self.bar.y + 4, btn_w, bar_h - 8);
-        self.cancel = Rect::new(self.done.x - 6 - btn_w, self.done.y, btn_w, self.done.h);
+
+        let by = self.bar.y + sc(6, scale);
+        let bh = bar_h - sc(12, scale);
+        self.cancel_btn = Rect::new(self.bar.right() - pad - btn_w, by, btn_w, bh);
+        self.done_btn = Rect::new(self.cancel_btn.x - sc(6, scale) - btn_w, by, btn_w, bh);
+        self.auto_btn = Rect::new(self.done_btn.x - sc(6, scale) - auto_btn_w, by, auto_btn_w, bh);
+
         unsafe {
             let outer = CreateRectRgn(
                 self.hole.x - 4,
@@ -287,7 +398,7 @@ impl Hud {
     }
 }
 
-struct Pix {
+pub(crate) struct Pix {
     buf: Vec<u8>,
     stride: i32,
     w: i32,
@@ -297,8 +408,14 @@ struct Pix {
 pub struct Stitcher {
     canvas: Option<Bitmap>,
     last: Option<Bitmap>,
-    pending: Option<Bitmap>,
     footer: i32,
+    stagnant_count: usize,
+}
+
+impl Default for Stitcher {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Stitcher {
@@ -306,8 +423,8 @@ impl Stitcher {
         Self {
             canvas: None,
             last: None,
-            pending: None,
             footer: 0,
+            stagnant_count: 0,
         }
     }
 
@@ -318,8 +435,8 @@ impl Stitcher {
     pub fn begin(&mut self, first: &Bitmap) {
         self.canvas = Some(first.clone());
         self.last = Some(first.clone());
-        self.pending = None;
         self.footer = 0;
+        self.stagnant_count = 0;
     }
 
     pub fn append(&mut self, frame: &Bitmap) -> bool {
@@ -335,34 +452,41 @@ impl Stitcher {
         if canvas.height >= MAX_HEIGHT {
             return false;
         }
+
         let incoming = copy_pix(frame);
         let committed = copy_pix(last);
+
+        // If frame is identical to last captured, nothing has scrolled yet
         if almost_equal(&incoming, &committed) {
             return false;
         }
-        if self.pending.is_none() {
-            self.pending = Some(frame.clone());
-            return false;
-        }
-        let pending = copy_pix(self.pending.as_ref().unwrap());
-        if !almost_equal(&incoming, &pending) {
-            self.pending = Some(frame.clone());
-            return false;
-        }
-        self.pending = None;
+
         let skip_top = detect_sticky(&committed, &incoming, true);
         let skip_bot = detect_sticky(&committed, &incoming, false);
         let dy = find_delta(&committed, &incoming, skip_top, skip_bot);
+
         if dy <= 0 {
+            self.stagnant_count += 1;
+            // If stagnant for multiple captures, user may have scrolled past max_dy.
+            // Reset reference to incoming frame so stitching can recover smoothly.
+            if self.stagnant_count > 8 {
+                self.last = Some(frame.clone());
+                self.stagnant_count = 0;
+            }
             return false;
         }
-        if self.footer == 0 {
+
+        self.stagnant_count = 0;
+
+        if self.footer == 0 && skip_bot > 0 && skip_bot < frame.height / 4 {
             self.footer = skip_bot;
         }
+
         let mut add = dy.min(MAX_HEIGHT - canvas.height);
         if add <= 0 {
             return false;
         }
+
         let mut src_y = frame.height - self.footer - add;
         if src_y < skip_top {
             src_y = skip_top;
@@ -371,6 +495,7 @@ impl Stitcher {
         if add <= 0 {
             return false;
         }
+
         let body_h = (canvas.height - self.footer).max(0);
         let mut grown = Bitmap::new(canvas.width, body_h + add + self.footer);
         copy_rows(&mut grown, 0, canvas, 0, body_h);
@@ -384,6 +509,7 @@ impl Stitcher {
                 self.footer,
             );
         }
+
         self.canvas = Some(grown);
         self.last = Some(frame.clone());
         true
@@ -427,8 +553,8 @@ fn almost_equal(a: &Pix, b: &Pix) -> bool {
     if a.w != b.w || a.h != b.h {
         return false;
     }
-    let step_y = (a.h / 80).max(1);
-    let step_x = (a.w / 80).max(1);
+    let step_y = (a.h / 50).max(2);
+    let step_x = (a.w / 50).max(2);
     let mut sum = 0i64;
     let mut n = 0i64;
     let mut y = 0;
@@ -445,11 +571,11 @@ fn almost_equal(a: &Pix, b: &Pix) -> bool {
         }
         y += step_y;
     }
-    n > 0 && sum / n < 8
+    n > 0 && (sum / n) < 6
 }
 
 fn detect_sticky(a: &Pix, b: &Pix, from_top: bool) -> i32 {
-    let max = (a.h / 4).max(4);
+    let max = (a.h / 5).max(4);
     let mut run = 0;
     if from_top {
         for y in 0..max {
@@ -466,7 +592,7 @@ fn detect_sticky(a: &Pix, b: &Pix, from_top: bool) -> i32 {
             run += 1;
         }
     }
-    if run >= 4 {
+    if run >= 6 {
         run
     } else {
         0
@@ -474,66 +600,189 @@ fn detect_sticky(a: &Pix, b: &Pix, from_top: bool) -> i32 {
 }
 
 fn row_close(a: &Pix, ay: i32, b: &Pix, by: i32) -> bool {
-    let step = (a.w / 80).max(1);
-    let cols = (a.w + step - 1) / step;
-    diff(a, ay, b, by, 1) < cols as i64 * 12
+    let sample_w = if a.w > 100 { a.w - 18 } else { a.w };
+    let step = (sample_w / 60).max(1);
+    let cols = (sample_w + step - 1) / step;
+    diff(a, ay, b, by, 1, sample_w, step) < cols as i64 * 14
 }
 
-fn find_delta(a: &Pix, b: &Pix, skip_top: i32, skip_bot: i32) -> i32 {
+pub fn find_delta(a: &Pix, b: &Pix, skip_top: i32, skip_bot: i32) -> i32 {
     let h = a.h;
-    let top = skip_top;
-    let bot = h - skip_bot;
+    let top = skip_top.clamp(0, h / 3);
+    let bot = (h - skip_bot).clamp(top + 24, h);
     let content_h = bot - top;
     if content_h < 24 {
         return 0;
     }
+
+    // Require at least 25% overlap
     let min_overlap = (content_h / 4).max(16);
     let max_dy = content_h - min_overlap;
     if max_dy < 1 {
         return 0;
     }
-    let step = (a.w / 80).max(1);
-    let cols = (a.w + step - 1) / step;
-    let thresh = cols as i64 * 20;
+
+    // Exclude scrollbar noise on the right edge
+    let right_margin = if a.w > 100 { 18 } else { 0 };
+    let sample_w = a.w - right_margin;
+    let step_x = (sample_w / 60).max(1);
+    let cols = (sample_w + step_x - 1) / step_x;
+
     let mut best_norm = i64::MAX;
     let mut best_dy = 0;
+
     for dy in 1..=max_dy {
         let rows = content_h - dy;
-        let norm = diff(a, top + dy, b, top, rows) / rows as i64;
+        let d = diff(a, top + dy, b, top, rows, sample_w, step_x);
+        let norm = d / rows as i64;
         if norm < best_norm {
             best_norm = norm;
             best_dy = dy;
         }
     }
+
+    // Average channel difference threshold per sampled pixel
+    let thresh = cols as i64 * 45;
     if best_dy <= 0 || best_norm > thresh {
         return 0;
     }
-    let allow = best_norm * 115 / 100 + 3;
-    for dy in 1..best_dy {
-        let rows = content_h - dy;
-        let norm = diff(a, top + dy, b, top, rows) / rows as i64;
-        if norm <= allow {
-            return dy;
-        }
-    }
+
     best_dy
 }
 
-fn diff(a: &Pix, ay: i32, b: &Pix, by: i32, rows: i32) -> i64 {
-    let step = (a.w / 80).max(1);
+fn diff(a: &Pix, ay: i32, b: &Pix, by: i32, rows: i32, sample_w: i32, step_x: i32) -> i64 {
     let mut sum = 0i64;
-    for row in 0..rows {
+    let step_y = if rows > 100 { 2 } else { 1 };
+    let mut row = 0;
+    while row < rows {
         let oa = (ay + row) * a.stride;
         let ob = (by + row) * b.stride;
         let mut x = 0;
-        while x < a.w {
+        while x < sample_w {
             let ia = (oa + x * 4) as usize;
             let ib = (ob + x * 4) as usize;
             sum += (a.buf[ia] as i64 - b.buf[ib] as i64).abs()
                 + (a.buf[ia + 1] as i64 - b.buf[ib + 1] as i64).abs()
                 + (a.buf[ia + 2] as i64 - b.buf[ib + 2] as i64).abs();
-            x += step;
+            x += step_x;
         }
+        row += step_y;
+    }
+    if step_y > 1 {
+        sum = sum * rows as i64 / ((rows + step_y - 1) / step_y) as i64;
     }
     sum
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::geom::Color;
+
+    fn create_test_pattern(w: i32, h: i32) -> Bitmap {
+        let mut bmp = Bitmap::new(w, h);
+        // Fill white
+        for y in 0..h {
+            for x in 0..w {
+                bmp.set(x, y, Color::rgb(255, 255, 255));
+            }
+        }
+        // Draw distinct non-periodic lines with varied positions and colors
+        let line_y = [25, 65, 115, 180, 260, 350, 450, 560];
+        for (idx, &y) in line_y.iter().enumerate() {
+            if y + 2 < h {
+                for x in 10..w - 10 {
+                    let r = ((idx * 37) % 256) as u8;
+                    let g = ((idx * 73) % 256) as u8;
+                    bmp.set(x, y, Color::rgb(r, g, 40));
+                    bmp.set(x, y + 1, Color::rgb(r, g, 100));
+                }
+            }
+        }
+        bmp
+    }
+
+    #[test]
+    fn test_find_delta_exact_shift() {
+        let w = 200;
+        let h = 300;
+        let full = create_test_pattern(w, 500);
+
+        // Frame A is rows 0..300
+        let mut frame_a = Bitmap::new(w, h);
+        copy_rows(&mut frame_a, 0, &full, 0, h);
+
+        // Frame B is rows 45..345 (shifted down by 45 pixels)
+        let mut frame_b = Bitmap::new(w, h);
+        copy_rows(&mut frame_b, 0, &full, 45, h);
+
+        let pix_a = copy_pix(&frame_a);
+        let pix_b = copy_pix(&frame_b);
+
+        let dy = find_delta(&pix_a, &pix_b, 0, 0);
+        assert_eq!(dy, 45, "Should accurately detect 45px scroll shift");
+    }
+
+    #[test]
+    fn test_whitespace_does_not_collapse_to_1px() {
+        let w = 200;
+        let h = 300;
+        let mut full = Bitmap::new(w, 500);
+        // Large whitespace with only two lines
+        for y in 0..500 {
+            for x in 0..w {
+                full.set(x, y, Color::rgb(255, 255, 255));
+            }
+        }
+        for x in 20..180 {
+            full.set(x, 50, Color::rgb(0, 0, 0));
+            full.set(x, 200, Color::rgb(0, 0, 0));
+            full.set(x, 350, Color::rgb(0, 0, 0));
+        }
+
+        let mut frame_a = Bitmap::new(w, h);
+        copy_rows(&mut frame_a, 0, &full, 0, h);
+
+        let mut frame_b = Bitmap::new(w, h);
+        copy_rows(&mut frame_b, 0, &full, 60, h);
+
+        let pix_a = copy_pix(&frame_a);
+        let pix_b = copy_pix(&frame_b);
+
+        let dy = find_delta(&pix_a, &pix_b, 0, 0);
+        assert_eq!(dy, 60, "Should detect 60px shift instead of collapsing to 1px on whitespace");
+    }
+
+    #[test]
+    fn test_stitcher_continuous_growth() {
+        let w = 160;
+        let h = 200;
+        let full = create_test_pattern(w, 600);
+
+        let mut stitcher = Stitcher::new();
+
+        let mut f0 = Bitmap::new(w, h);
+        copy_rows(&mut f0, 0, &full, 0, h);
+        stitcher.begin(&f0);
+        assert_eq!(stitcher.height(), 200);
+
+        // Scroll step 1: +35px
+        let mut f1 = Bitmap::new(w, h);
+        copy_rows(&mut f1, 0, &full, 35, h);
+        let stitched1 = stitcher.append(&f1);
+        assert!(stitched1, "Step 1 should stitch");
+        assert_eq!(stitcher.height(), 235);
+
+        // Scroll step 2: +50px
+        let mut f2 = Bitmap::new(w, h);
+        copy_rows(&mut f2, 0, &full, 85, h);
+        let stitched2 = stitcher.append(&f2);
+        assert!(stitched2, "Step 2 should stitch");
+        assert_eq!(stitcher.height(), 285);
+
+        // Take result
+        let result = stitcher.take();
+        assert_eq!(result.width, w);
+        assert_eq!(result.height, 285);
+    }
 }

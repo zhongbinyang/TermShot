@@ -475,3 +475,16 @@ pub const MOD_CONTROL_BIT: u32 = MOD_CONTROL.0;
 pub const MOD_SHIFT_BIT: u32 = MOD_SHIFT.0;
 pub const MOD_ALT_BIT: u32 = MOD_ALT.0;
 pub const MOD_WIN_BIT: u32 = MOD_WIN.0;
+
+pub fn send_wheel(delta: i32) {
+    unsafe {
+        windows::Win32::UI::Input::KeyboardAndMouse::mouse_event(
+            windows::Win32::UI::Input::KeyboardAndMouse::MOUSEEVENTF_WHEEL,
+            0,
+            0,
+            delta,
+            0,
+        );
+    }
+}
+
