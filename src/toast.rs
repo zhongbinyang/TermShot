@@ -12,15 +12,17 @@ use windows::Win32::Graphics::Gdi::{
     DT_SINGLELINE, DT_VCENTER, DT_WORDBREAK, FW_BOLD, FW_NORMAL, HFONT, OUT_DEFAULT_PRECIS,
     PAINTSTRUCT, PS_SOLID, SRCCOPY, TRANSPARENT,
 };
+use windows::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindowLongPtrW, KillTimer, LoadCursorW,
     PostMessageW, RegisterClassExW, SetCursor, SetTimer, SetWindowLongPtrW, CS_DBLCLKS,
-    GWLP_USERDATA, IDC_HAND, WM_APP, WM_DESTROY, WM_LBUTTONDOWN, WM_PAINT, WM_SETCURSOR,
-    WM_TIMER, WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
-    WS_VISIBLE,
+    GWLP_USERDATA, IDC_HAND, WM_APP, WM_DESTROY, WM_LBUTTONDOWN, WM_MOUSEMOVE, WM_PAINT,
+    WM_SETCURSOR, WM_TIMER, WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+    WS_POPUP, WS_VISIBLE,
 };
 
 pub const WM_SHOW_TOAST: u32 = WM_APP + 40;
+const WM_MOUSELEAVE: u32 = 0x02A3;
 
 struct Toast {
     title: String,
@@ -29,6 +31,7 @@ struct Toast {
     w: i32,
     h: i32,
     scale: f32,
+    hovering: bool,
 }
 
 static HOST: AtomicPtr<core::ffi::c_void> = AtomicPtr::new(std::ptr::null_mut());
@@ -80,7 +83,7 @@ fn show_now(title: &str, text: &str) {
         let w = sc(340, scale);
         let h = sc(86, scale);
         let x = work.right() - w - sc(16, scale);
-        let y = work.bottom() - h - sc(16, scale);
+        let y = work.y + sc(16, scale);
 
         let cur = current();
         if !cur.0.is_null() && !cur.is_invalid() {
@@ -93,6 +96,7 @@ fn show_now(title: &str, text: &str) {
                 t.w = w;
                 t.h = h;
                 t.scale = scale;
+                t.hovering = false;
 
                 let card_round = sc(8, scale);
                 let rgn = CreateRoundRectRgn(0, 0, w + 1, h + 1, card_round, card_round);
@@ -112,6 +116,7 @@ fn show_now(title: &str, text: &str) {
             w,
             h,
             scale,
+            hovering: false,
         });
 
         let class = wide("TermShotToast");
@@ -279,11 +284,41 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
             let _ = EndPaint(hwnd, &ps);
             LRESULT(0)
         }
+        WM_MOUSEMOVE => {
+            if !ptr.is_null() {
+                (*ptr).hovering = true;
+                (*ptr).remaining = 2500;
+            }
+            let mut tme = TRACKMOUSEEVENT {
+                cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+                dwFlags: TME_LEAVE,
+                hwndTrack: hwnd,
+                dwHoverTime: 0,
+            };
+            let _ = TrackMouseEvent(&mut tme);
+            LRESULT(0)
+        }
+        WM_MOUSELEAVE => {
+            if !ptr.is_null() {
+                (*ptr).hovering = false;
+                (*ptr).remaining = 2000;
+            }
+            LRESULT(0)
+        }
         WM_TIMER => {
             if !ptr.is_null() {
-                (*ptr).remaining = (*ptr).remaining.saturating_sub(50);
-                if (*ptr).remaining == 0 {
-                    let _ = DestroyWindow(hwnd);
+                let cur = cursor_pos();
+                let mut pt = windows::Win32::Foundation::POINT { x: cur.x, y: cur.y };
+                let _ = windows::Win32::Graphics::Gdi::ScreenToClient(hwnd, &mut pt);
+                let is_inside = pt.x >= 0 && pt.x < (*ptr).w && pt.y >= 0 && pt.y < (*ptr).h;
+
+                if is_inside || (*ptr).hovering {
+                    (*ptr).remaining = 2500;
+                } else {
+                    (*ptr).remaining = (*ptr).remaining.saturating_sub(50);
+                    if (*ptr).remaining == 0 {
+                        let _ = DestroyWindow(hwnd);
+                    }
                 }
             }
             LRESULT(0)
