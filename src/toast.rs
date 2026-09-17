@@ -1,18 +1,23 @@
-use crate::draw::{draw_text, fill_rect};
-use crate::geom::{Point, Rect};
-use crate::native::{
-    cursor_pos, dpi_scale_at, hinstance, monitor_from_point, place_topmost, sc, virtual_screen,
-};
+use crate::geom::Rect;
+use crate::native::{cursor_pos, dpi_scale_at, hinstance, place_topmost, sc, work_area_from_point};
 use crate::theme;
 use crate::util::wide;
 use std::sync::atomic::{AtomicPtr, Ordering};
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
-use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, InvalidateRect, PAINTSTRUCT};
+use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Graphics::Gdi::{
+    BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW, CreatePen,
+    CreateRoundRectRgn, CreateSolidBrush, DeleteDC, DeleteObject, DrawTextW, EndPaint,
+    InvalidateRect, RoundRect, SelectObject, SetBkMode, SetTextColor, SetWindowRgn,
+    CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DT_LEFT, DT_NOPREFIX,
+    DT_SINGLELINE, DT_VCENTER, DT_WORDBREAK, FW_BOLD, FW_NORMAL, HFONT, OUT_DEFAULT_PRECIS,
+    PAINTSTRUCT, PS_SOLID, SRCCOPY, TRANSPARENT,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindowLongPtrW, KillTimer, PostMessageW,
-    RegisterClassExW, SetTimer, SetWindowLongPtrW, CS_DBLCLKS, GWLP_USERDATA, WM_APP, WM_DESTROY,
-    WM_LBUTTONDOWN, WM_PAINT, WM_TIMER, WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-    WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindowLongPtrW, KillTimer, LoadCursorW,
+    PostMessageW, RegisterClassExW, SetCursor, SetTimer, SetWindowLongPtrW, CS_DBLCLKS,
+    GWLP_USERDATA, IDC_HAND, WM_APP, WM_DESTROY, WM_LBUTTONDOWN, WM_PAINT, WM_SETCURSOR,
+    WM_TIMER, WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    WS_VISIBLE,
 };
 
 pub const WM_SHOW_TOAST: u32 = WM_APP + 40;
@@ -68,20 +73,38 @@ fn set_current(hwnd: HWND) {
 
 fn show_now(title: &str, text: &str) {
     unsafe {
+        let cur_pt = cursor_pos();
+        let work = work_area_from_point(cur_pt);
+        let scale = dpi_scale_at(cur_pt).max(1.0);
+
+        let w = sc(340, scale);
+        let h = sc(86, scale);
+        let x = work.right() - w - sc(16, scale);
+        let y = work.bottom() - h - sc(16, scale);
+
         let cur = current();
         if !cur.0.is_null() && !cur.is_invalid() {
             let ptr = GetWindowLongPtrW(cur, GWLP_USERDATA) as *mut Toast;
             if !ptr.is_null() {
-                (*ptr).title = title.to_string();
-                (*ptr).text = text.chars().take(400).collect();
-                (*ptr).remaining = 3200;
+                let t = &mut *ptr;
+                t.title = title.to_string();
+                t.text = text.chars().take(400).collect();
+                t.remaining = 3200;
+                t.w = w;
+                t.h = h;
+                t.scale = scale;
+
+                let card_round = sc(8, scale);
+                let rgn = CreateRoundRectRgn(0, 0, w + 1, h + 1, card_round, card_round);
+                let _ = SetWindowRgn(cur, rgn, true);
+                let _ = DeleteObject(rgn);
+
+                place_topmost(cur, Rect::new(x, y, w, h), false);
                 let _ = InvalidateRect(cur, None, false);
                 return;
             }
         }
-        let scale = dpi_scale_at(cursor_pos()).max(1.0);
-        let w = sc(360, scale);
-        let h = sc(110, scale);
+
         let state = Box::new(Toast {
             title: title.to_string(),
             text: text.chars().take(400).collect(),
@@ -90,6 +113,7 @@ fn show_now(title: &str, text: &str) {
             h,
             scale,
         });
+
         let class = wide("TermShotToast");
         let wc = WNDCLASSEXW {
             cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
@@ -100,10 +124,7 @@ fn show_now(title: &str, text: &str) {
             ..Default::default()
         };
         let _ = RegisterClassExW(&wc);
-        let vs = virtual_screen();
-        let mon = monitor_from_point(Point::new(vs.right() - 40, vs.bottom() - 40));
-        let x = mon.right() - w - sc(24, scale);
-        let y = mon.bottom() - h - sc(48, scale);
+
         let hwnd = CreateWindowExW(
             WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
             windows::core::PCWSTR(class.as_ptr()),
@@ -119,6 +140,12 @@ fn show_now(title: &str, text: &str) {
             Some(Box::into_raw(state) as *mut _),
         )
         .unwrap_or_default();
+
+        let card_round = sc(8, scale);
+        let rgn = CreateRoundRectRgn(0, 0, w + 1, h + 1, card_round, card_round);
+        let _ = SetWindowRgn(hwnd, rgn, true);
+        let _ = DeleteObject(rgn);
+
         set_current(hwnd);
         place_topmost(hwnd, Rect::new(x, y, w, h), false);
         let _ = SetTimer(hwnd, 1, 50, None);
@@ -135,6 +162,27 @@ pub fn close() {
     }
 }
 
+fn make_font(px: i32, bold: bool) -> HFONT {
+    unsafe {
+        CreateFontW(
+            -px,
+            0,
+            0,
+            0,
+            if bold { FW_BOLD.0 as i32 } else { FW_NORMAL.0 as i32 },
+            0,
+            0,
+            0,
+            DEFAULT_CHARSET.0 as u32,
+            OUT_DEFAULT_PRECIS.0 as u32,
+            CLIP_DEFAULT_PRECIS.0 as u32,
+            CLEARTYPE_QUALITY.0 as u32,
+            0,
+            windows::core::w!("Microsoft YaHei UI"),
+        )
+    }
+}
+
 unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if msg == windows::Win32::UI::WindowsAndMessaging::WM_NCCREATE {
         let cs = &*(lparam.0 as *const windows::Win32::UI::WindowsAndMessaging::CREATESTRUCTW);
@@ -148,23 +196,85 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
             let hdc = BeginPaint(hwnd, &mut ps);
             if !ptr.is_null() {
                 let t = &*ptr;
-                let mut frame = crate::bitmap::Bitmap::new(t.w, t.h);
-                fill_rect(&mut frame, 0, 0, t.w, t.h, theme::WIN_BG);
-                draw_text(
-                    &mut frame,
-                    Point::new(sc(16, t.scale), sc(12, t.scale)),
-                    &t.title,
-                    theme::ACCENT_HI,
-                    sc(16, t.scale),
+                let scale = t.scale.max(1.0);
+
+                let mem_dc = CreateCompatibleDC(hdc);
+                let mem_bmp = CreateCompatibleBitmap(hdc, t.w, t.h);
+                let old_bmp = SelectObject(mem_dc, mem_bmp);
+
+                let card_round = sc(8, scale);
+
+                // 1. Background Card
+                let bg_brush = CreateSolidBrush(COLORREF(theme::PANEL.colorref()));
+                let border_pen = CreatePen(PS_SOLID, 1, COLORREF(theme::BORDER.colorref()));
+                let old_b = SelectObject(mem_dc, bg_brush);
+                let old_p = SelectObject(mem_dc, border_pen);
+                let _ = RoundRect(mem_dc, 0, 0, t.w, t.h, card_round, card_round);
+                SelectObject(mem_dc, old_b);
+                SelectObject(mem_dc, old_p);
+                let _ = DeleteObject(bg_brush);
+                let _ = DeleteObject(border_pen);
+
+                // 2. Left Accent Indicator Stripe
+                let bar_x = sc(6, scale);
+                let bar_y = sc(12, scale);
+                let bar_w = sc(3, scale).max(2);
+                let bar_h = t.h - sc(24, scale);
+                let accent_brush = CreateSolidBrush(COLORREF(theme::ACCENT.colorref()));
+                let old_ab = SelectObject(mem_dc, accent_brush);
+                let _ = RoundRect(mem_dc, bar_x, bar_y, bar_x + bar_w, bar_y + bar_h, sc(2, scale), sc(2, scale));
+                SelectObject(mem_dc, old_ab);
+                let _ = DeleteObject(accent_brush);
+
+                // 3. Title Text
+                SetBkMode(mem_dc, TRANSPARENT);
+                SetTextColor(mem_dc, COLORREF(theme::ACCENT_HI.colorref()));
+                let font_title = make_font(sc(13, scale), true);
+                let old_font = SelectObject(mem_dc, font_title);
+
+                let mut wt_title = wide(&t.title);
+                let mut rc_title = RECT {
+                    left: sc(18, scale),
+                    top: sc(10, scale),
+                    right: t.w - sc(14, scale),
+                    bottom: sc(28, scale),
+                };
+                DrawTextW(
+                    mem_dc,
+                    &mut wt_title,
+                    &mut rc_title,
+                    DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
                 );
-                draw_text(
-                    &mut frame,
-                    Point::new(sc(16, t.scale), sc(40, t.scale)),
-                    &t.text,
-                    theme::TEXT,
-                    sc(13, t.scale),
+
+                // 4. Content Text (Multi-line word break)
+                SetTextColor(mem_dc, COLORREF(theme::TEXT.colorref()));
+                let font_text = make_font(sc(11, scale), false);
+                SelectObject(mem_dc, font_text);
+
+                let mut wt_text = wide(&t.text);
+                let mut rc_text = RECT {
+                    left: sc(18, scale),
+                    top: sc(32, scale),
+                    right: t.w - sc(14, scale),
+                    bottom: t.h - sc(8, scale),
+                };
+                DrawTextW(
+                    mem_dc,
+                    &mut wt_text,
+                    &mut rc_text,
+                    DT_LEFT | DT_WORDBREAK | DT_NOPREFIX,
                 );
-                frame.blit_to_hdc(hdc, Rect::new(0, 0, t.w, t.h));
+
+                // Blit to screen
+                let _ = BitBlt(hdc, 0, 0, t.w, t.h, mem_dc, 0, 0, SRCCOPY);
+
+                SelectObject(mem_dc, old_font);
+                let _ = DeleteObject(font_title);
+                let _ = DeleteObject(font_text);
+
+                SelectObject(mem_dc, old_bmp);
+                let _ = DeleteObject(mem_bmp);
+                let _ = DeleteDC(mem_dc);
             }
             let _ = EndPaint(hwnd, &ps);
             LRESULT(0)
@@ -177,6 +287,11 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                 }
             }
             LRESULT(0)
+        }
+        WM_SETCURSOR => {
+            let cursor = LoadCursorW(None, IDC_HAND).unwrap_or_default();
+            SetCursor(cursor);
+            LRESULT(1)
         }
         WM_LBUTTONDOWN => {
             let _ = DestroyWindow(hwnd);
