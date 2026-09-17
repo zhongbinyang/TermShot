@@ -14,3 +14,7 @@ pub const PANEL: Color = Color::rgb(0x1A, 0x21, 0x2B);
 pub const BORDER: Color = Color::rgb(0x2A, 0x33, 0x40);
 pub const INPUT_BG: Color = Color::rgb(0x0D, 0x11, 0x17);
 pub const DANGER: Color = Color::rgb(0xF0, 0x71, 0x78);
+pub const SIDEBAR_BG: Color = Color::rgb(0x16, 0x1B, 0x24);
+pub const HOVER_BG: Color = Color::rgb(0x23, 0x2D, 0x3B);
+pub const BOTTOM_BAR_BG: Color = Color::rgb(0x14, 0x19, 0x22);
+
