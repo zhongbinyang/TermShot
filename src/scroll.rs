@@ -9,7 +9,7 @@ use windows::Win32::Graphics::Gdi::{
     BeginPaint, CombineRgn, CreateRectRgn, DeleteObject, EndPaint, InvalidateRect, SetWindowRgn,
     PAINTSTRUCT, RGN_OR,
 };
-use windows::Win32::UI::Input::KeyboardAndMouse::{VK_ESCAPE, VK_RETURN, VK_SPACE};
+use windows::Win32::UI::Input::KeyboardAndMouse::{VK_ESCAPE, VK_RETURN};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect, GetWindowLongPtrW,
     LoadCursorW, PeekMessageW, RegisterClassExW, SetCursor, SetWindowLongPtrW, TranslateMessage,
@@ -23,20 +23,17 @@ pub const MAX_HEIGHT: i32 = 32000;
 pub enum HudDecision {
     Finish,
     Cancel,
-    ToggleAuto,
 }
 
 struct Hud {
     region: Rect,
     vs: Rect,
     height: i32,
-    auto_scroll: bool,
     hole: Rect,
     bar: Rect,
-    auto_btn: Rect,
     done_btn: Rect,
     cancel_btn: Rect,
-    hover: i32, // -1: none, 0: auto_btn, 1: done_btn, 2: cancel_btn
+    hover: i32, // -1: none, 0: done_btn, 1: cancel_btn
     decision: Option<HudDecision>,
 }
 
@@ -51,10 +48,8 @@ pub fn run_scroll(region: Rect) -> Option<Bitmap> {
         region,
         vs,
         height: region.h,
-        auto_scroll: false,
         hole: Rect::default(),
         bar: Rect::default(),
-        auto_btn: Rect::default(),
         done_btn: Rect::default(),
         cancel_btn: Rect::default(),
         hover: -1,
@@ -100,14 +95,11 @@ pub fn run_scroll(region: Rect) -> Option<Bitmap> {
         let _ = InvalidateRect(hwnd, None, false);
 
         // Drain any lingering initial keys
-        while key_down(VK_RETURN.0 as i32) || key_down(VK_ESCAPE.0 as i32) || key_down(0x52) || key_down(VK_SPACE.0 as i32) {
+        while key_down(VK_RETURN.0 as i32) || key_down(VK_ESCAPE.0 as i32) || key_down(0x52) {
             crate::native::sleep_ms(20);
             pump();
         }
 
-        let mut auto_scroll = false;
-        let mut last_wheel_time = std::time::Instant::now();
-        let mut auto_still_count = 0;
         let mut last_capture_time = std::time::Instant::now();
 
         loop {
@@ -123,12 +115,6 @@ pub fn run_scroll(region: Rect) -> Option<Bitmap> {
                     return None;
                 }
                 Some(HudDecision::Finish) => break,
-                Some(HudDecision::ToggleAuto) => {
-                    auto_scroll = !auto_scroll;
-                    hud.auto_scroll = auto_scroll;
-                    auto_still_count = 0;
-                    let _ = InvalidateRect(hwnd, None, false);
-                }
                 None => {}
             }
 
@@ -140,25 +126,9 @@ pub fn run_scroll(region: Rect) -> Option<Bitmap> {
             if key_down(VK_RETURN.0 as i32) {
                 break;
             }
-            if key_down(VK_SPACE.0 as i32) {
-                auto_scroll = !auto_scroll;
-                hud.auto_scroll = auto_scroll;
-                auto_still_count = 0;
-                let _ = InvalidateRect(hwnd, None, false);
-                while key_down(VK_SPACE.0 as i32) {
-                    crate::native::sleep_ms(20);
-                    pump();
-                }
-            }
 
             if session.height() >= MAX_HEIGHT {
                 break;
-            }
-
-            // Send wheel event if auto-scroll is enabled
-            if auto_scroll && last_wheel_time.elapsed() >= std::time::Duration::from_millis(130) {
-                crate::native::send_wheel(-120);
-                last_wheel_time = std::time::Instant::now();
             }
 
             // Capture and incrementally stitch frame
@@ -167,14 +137,7 @@ pub fn run_scroll(region: Rect) -> Option<Bitmap> {
                 if let Ok(frame) = crate::bitmap::capture_rect(region) {
                     if session.append(&frame) {
                         hud.height = session.height();
-                        auto_still_count = 0;
                         let _ = InvalidateRect(hwnd, None, false);
-                    } else if auto_scroll && last_wheel_time.elapsed() >= std::time::Duration::from_millis(110) {
-                        auto_still_count += 1;
-                        if auto_still_count >= 8 {
-                            // Reached bottom of page during auto-scroll
-                            break;
-                        }
                     }
                 }
             }
@@ -222,37 +185,17 @@ unsafe extern "system" fn hud_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                 fill_rect(&mut frame, 0, 0, hud.bar.w, hud.bar.h, Color::argb(246, 20, 26, 36));
 
                 // Status text
-                let status_msg = format!("高度: {} px  (空格自动滚 / 滚轮手动)", hud.height);
+                let status_msg = format!("用滚轮向下滚动  ·  高度: {} px", hud.height);
                 crate::draw::draw_text(
                     &mut frame,
-                    Point::new(sc(12, scale), (hud.bar.h - sc(15, scale)) / 2),
+                    Point::new(sc(14, scale), (hud.bar.h - sc(15, scale)) / 2),
                     &status_msg,
                     theme::TEXT,
-                    sc(12, scale),
-                );
-
-                // Auto-scroll toggle button
-                let auto_bg = if hud.auto_scroll {
-                    Color::argb(255, 45, 125, 95)
-                } else if hud.hover == 0 {
-                    Color::argb(255, 42, 54, 70)
-                } else {
-                    Color::argb(255, 28, 36, 48)
-                };
-                let auto_rx = hud.auto_btn.x - hud.bar.x;
-                let auto_ry = hud.auto_btn.y - hud.bar.y;
-                fill_rect(&mut frame, auto_rx, auto_ry, hud.auto_btn.w, hud.auto_btn.h, auto_bg);
-                let auto_text = if hud.auto_scroll { "⏸ 暂停" } else { "▶ 自动滚" };
-                crate::draw::draw_text(
-                    &mut frame,
-                    Point::new(auto_rx + sc(10, scale), auto_ry + sc(5, scale)),
-                    auto_text,
-                    if hud.auto_scroll { theme::ACCENT_HI } else { theme::TEXT },
-                    sc(12, scale),
+                    sc(13, scale),
                 );
 
                 // Done button (Accent CTA)
-                let done_bg = if hud.hover == 1 {
+                let done_bg = if hud.hover == 0 {
                     theme::ACCENT_HI
                 } else {
                     theme::ACCENT
@@ -262,14 +205,14 @@ unsafe extern "system" fn hud_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                 fill_rect(&mut frame, done_rx, done_ry, hud.done_btn.w, hud.done_btn.h, done_bg);
                 crate::draw::draw_text(
                     &mut frame,
-                    Point::new(done_rx + sc(12, scale), done_ry + sc(5, scale)),
+                    Point::new(done_rx + sc(14, scale), done_ry + sc(5, scale)),
                     "✓ 完成",
                     Color::rgb(0x06, 0x22, 0x1B),
                     sc(12, scale),
                 );
 
                 // Cancel button
-                let cancel_bg = if hud.hover == 2 {
+                let cancel_bg = if hud.hover == 1 {
                     Color::argb(255, 42, 54, 70)
                 } else {
                     Color::argb(255, 28, 36, 48)
@@ -279,7 +222,7 @@ unsafe extern "system" fn hud_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                 fill_rect(&mut frame, cancel_rx, cancel_ry, hud.cancel_btn.w, hud.cancel_btn.h, cancel_bg);
                 crate::draw::draw_text(
                     &mut frame,
-                    Point::new(cancel_rx + sc(12, scale), cancel_ry + sc(5, scale)),
+                    Point::new(cancel_rx + sc(14, scale), cancel_ry + sc(5, scale)),
                     "✕ 取消",
                     theme::TEXT,
                     sc(12, scale),
@@ -292,12 +235,10 @@ unsafe extern "system" fn hud_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
         }
         WM_MOUSEMOVE => {
             let p = lp(lparam);
-            let h = if hud.auto_btn.contains(p) {
+            let h = if hud.done_btn.contains(p) {
                 0
-            } else if hud.done_btn.contains(p) {
-                1
             } else if hud.cancel_btn.contains(p) {
-                2
+                1
             } else {
                 -1
             };
@@ -309,9 +250,7 @@ unsafe extern "system" fn hud_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
         }
         WM_LBUTTONDOWN => {
             let p = lp(lparam);
-            if hud.auto_btn.contains(p) {
-                hud.decision = Some(HudDecision::ToggleAuto);
-            } else if hud.done_btn.contains(p) {
+            if hud.done_btn.contains(p) {
                 hud.decision = Some(HudDecision::Finish);
             } else if hud.cancel_btn.contains(p) {
                 hud.decision = Some(HudDecision::Cancel);
@@ -327,7 +266,7 @@ unsafe extern "system" fn hud_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             let mut pt = windows::Win32::Foundation::POINT { x: cur.x, y: cur.y };
             let _ = windows::Win32::Graphics::Gdi::ScreenToClient(hwnd, &mut pt);
             let p = Point::new(pt.x, pt.y);
-            if hud.auto_btn.contains(p) || hud.done_btn.contains(p) || hud.cancel_btn.contains(p) {
+            if hud.done_btn.contains(p) || hud.cancel_btn.contains(p) {
                 let cursor = LoadCursorW(None, IDC_HAND).unwrap_or_default();
                 SetCursor(cursor);
                 return LRESULT(1);
@@ -362,9 +301,8 @@ impl Hud {
         let scale = dpi_scale_hwnd(hwnd).max(1.0);
         let bar_h = sc(40, scale);
         let pad = sc(8, scale);
-        let btn_w = sc(68, scale);
-        let auto_btn_w = sc(84, scale);
-        let bar_w = sc(470, scale);
+        let btn_w = sc(72, scale);
+        let bar_w = sc(400, scale);
         let mut x = self.hole.x + (self.hole.w - bar_w) / 2;
         let mut y = self.hole.bottom() + pad;
         if y + bar_h > ch - 4 {
@@ -377,8 +315,7 @@ impl Hud {
         let by = self.bar.y + sc(6, scale);
         let bh = bar_h - sc(12, scale);
         self.cancel_btn = Rect::new(self.bar.right() - pad - btn_w, by, btn_w, bh);
-        self.done_btn = Rect::new(self.cancel_btn.x - sc(6, scale) - btn_w, by, btn_w, bh);
-        self.auto_btn = Rect::new(self.done_btn.x - sc(6, scale) - auto_btn_w, by, auto_btn_w, bh);
+        self.done_btn = Rect::new(self.cancel_btn.x - sc(8, scale) - btn_w, by, btn_w, bh);
 
         unsafe {
             let outer = CreateRectRgn(
