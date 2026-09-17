@@ -6,11 +6,11 @@ use std::sync::atomic::{AtomicPtr, Ordering};
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW, CreatePen,
-    CreateRoundRectRgn, CreateSolidBrush, DeleteDC, DeleteObject, DrawTextW, EndPaint,
-    InvalidateRect, RoundRect, SelectObject, SetBkMode, SetTextColor, SetWindowRgn,
-    CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DT_LEFT, DT_NOPREFIX,
-    DT_SINGLELINE, DT_VCENTER, DT_WORDBREAK, FW_BOLD, FW_NORMAL, HFONT, OUT_DEFAULT_PRECIS,
-    PAINTSTRUCT, PS_SOLID, SRCCOPY, TRANSPARENT,
+    CreateRoundRectRgn, CreateSolidBrush, DeleteDC, DeleteObject, DrawTextW, EndPaint, GetDC,
+    InvalidateRect, ReleaseDC, RoundRect, SelectObject, SetBkMode, SetTextColor, SetWindowRgn,
+    CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DT_CALCRECT, DT_END_ELLIPSIS, DT_LEFT,
+    DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER, DT_WORDBREAK, FW_BOLD, FW_NORMAL, HFONT,
+    OUT_DEFAULT_PRECIS, PAINTSTRUCT, PS_SOLID, SRCCOPY, TRANSPARENT,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -74,14 +74,55 @@ fn set_current(hwnd: HWND) {
     CURRENT.store(hwnd.0, Ordering::SeqCst);
 }
 
+fn measure_text_height(text: &str, max_w: i32, scale: f32) -> i32 {
+    if text.trim().is_empty() {
+        return 0;
+    }
+    unsafe {
+        let dc = GetDC(None);
+        let font = make_font(sc(11, scale), false);
+        let old = SelectObject(dc, font);
+        let mut wt = wide(text);
+        let mut rc = RECT {
+            left: 0,
+            top: 0,
+            right: max_w.max(1),
+            bottom: 0,
+        };
+        DrawTextW(dc, &mut wt, &mut rc, DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
+        SelectObject(dc, old);
+        let _ = DeleteObject(font);
+        let _ = ReleaseDC(None, dc);
+        rc.bottom - rc.top
+    }
+}
+
+pub(crate) fn compute_toast_dims(text: &str, scale: f32) -> (i32, i32, u32) {
+    let w = sc(400, scale);
+    let content_pad_x = sc(32, scale); // 18 left + 14 right
+    let text_w = w - content_pad_x;
+
+    let text_trimmed = text.trim();
+    let (h, duration) = if text_trimmed.is_empty() {
+        (sc(48, scale), 2600)
+    } else {
+        let text_h = measure_text_height(text_trimmed, text_w, scale);
+        let needed_h = sc(10 + 18 + 6 + 12, scale) + text_h;
+        let clamped_h = needed_h.clamp(sc(82, scale), sc(220, scale));
+        let ms = if text_trimmed.len() > 60 { 4500 } else { 3200 };
+        (clamped_h, ms)
+    };
+    (w, h, duration)
+}
+
 fn show_now(title: &str, text: &str) {
     unsafe {
         let cur_pt = cursor_pos();
         let work = work_area_from_point(cur_pt);
         let scale = dpi_scale_at(cur_pt).max(1.0);
 
-        let w = sc(340, scale);
-        let h = sc(86, scale);
+        let (w, h, duration) = compute_toast_dims(text, scale);
+
         let x = work.right() - w - sc(16, scale);
         let y = work.y + sc(16, scale);
 
@@ -91,8 +132,8 @@ fn show_now(title: &str, text: &str) {
             if !ptr.is_null() {
                 let t = &mut *ptr;
                 t.title = title.to_string();
-                t.text = text.chars().take(400).collect();
-                t.remaining = 3200;
+                t.text = text.chars().take(600).collect();
+                t.remaining = duration;
                 t.w = w;
                 t.h = h;
                 t.scale = scale;
@@ -100,8 +141,9 @@ fn show_now(title: &str, text: &str) {
 
                 let card_round = sc(8, scale);
                 let rgn = CreateRoundRectRgn(0, 0, w + 1, h + 1, card_round, card_round);
-                let _ = SetWindowRgn(cur, rgn, true);
-                let _ = DeleteObject(rgn);
+                if SetWindowRgn(cur, rgn, true) == 0 {
+                    let _ = DeleteObject(rgn);
+                }
 
                 place_topmost(cur, Rect::new(x, y, w, h), false);
                 let _ = InvalidateRect(cur, None, false);
@@ -111,8 +153,8 @@ fn show_now(title: &str, text: &str) {
 
         let state = Box::new(Toast {
             title: title.to_string(),
-            text: text.chars().take(400).collect(),
-            remaining: 3200,
+            text: text.chars().take(600).collect(),
+            remaining: duration,
             w,
             h,
             scale,
@@ -148,8 +190,9 @@ fn show_now(title: &str, text: &str) {
 
         let card_round = sc(8, scale);
         let rgn = CreateRoundRectRgn(0, 0, w + 1, h + 1, card_round, card_round);
-        let _ = SetWindowRgn(hwnd, rgn, true);
-        let _ = DeleteObject(rgn);
+        if SetWindowRgn(hwnd, rgn, true) == 0 {
+            let _ = DeleteObject(rgn);
+        }
 
         set_current(hwnd);
         place_topmost(hwnd, Rect::new(x, y, w, h), false);
@@ -224,7 +267,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                 let bar_x = sc(6, scale);
                 let bar_y = sc(12, scale);
                 let bar_w = sc(3, scale).max(2);
-                let bar_h = t.h - sc(24, scale);
+                let bar_h = (t.h - sc(24, scale)).max(sc(16, scale));
                 let accent_brush = CreateSolidBrush(COLORREF(theme::ACCENT.colorref()));
                 let old_ab = SelectObject(mem_dc, accent_brush);
                 let _ = RoundRect(mem_dc, bar_x, bar_y, bar_x + bar_w, bar_y + bar_h, sc(2, scale), sc(2, scale));
@@ -237,12 +280,22 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                 let font_title = make_font(sc(13, scale), true);
                 let old_font = SelectObject(mem_dc, font_title);
 
+                let is_empty_text = t.text.trim().is_empty();
                 let mut wt_title = wide(&t.title);
-                let mut rc_title = RECT {
-                    left: sc(18, scale),
-                    top: sc(10, scale),
-                    right: t.w - sc(14, scale),
-                    bottom: sc(28, scale),
+                let mut rc_title = if is_empty_text {
+                    RECT {
+                        left: sc(18, scale),
+                        top: 0,
+                        right: t.w - sc(14, scale),
+                        bottom: t.h,
+                    }
+                } else {
+                    RECT {
+                        left: sc(18, scale),
+                        top: sc(10, scale),
+                        right: t.w - sc(14, scale),
+                        bottom: sc(28, scale),
+                    }
                 };
                 DrawTextW(
                     mem_dc,
@@ -251,24 +304,26 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                     DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
                 );
 
-                // 4. Content Text (Multi-line word break)
-                SetTextColor(mem_dc, COLORREF(theme::TEXT.colorref()));
+                // 4. Content Text (Multi-line word break with ellipsis)
                 let font_text = make_font(sc(11, scale), false);
-                SelectObject(mem_dc, font_text);
+                if !is_empty_text {
+                    SetTextColor(mem_dc, COLORREF(theme::TEXT.colorref()));
+                    SelectObject(mem_dc, font_text);
 
-                let mut wt_text = wide(&t.text);
-                let mut rc_text = RECT {
-                    left: sc(18, scale),
-                    top: sc(32, scale),
-                    right: t.w - sc(14, scale),
-                    bottom: t.h - sc(8, scale),
-                };
-                DrawTextW(
-                    mem_dc,
-                    &mut wt_text,
-                    &mut rc_text,
-                    DT_LEFT | DT_WORDBREAK | DT_NOPREFIX,
-                );
+                    let mut wt_text = wide(&t.text);
+                    let mut rc_text = RECT {
+                        left: sc(18, scale),
+                        top: sc(34, scale),
+                        right: t.w - sc(14, scale),
+                        bottom: t.h - sc(10, scale),
+                    };
+                    DrawTextW(
+                        mem_dc,
+                        &mut wt_text,
+                        &mut rc_text,
+                        DT_LEFT | DT_WORDBREAK | DT_NOPREFIX | DT_END_ELLIPSIS,
+                    );
+                }
 
                 // Blit to screen
                 let _ = BitBlt(hdc, 0, 0, t.w, t.h, mem_dc, 0, 0, SRCCOPY);
@@ -346,3 +401,28 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_toast_dimensions_empty_and_content() {
+        let (w, h_empty, dur_empty) = compute_toast_dims("", 1.0);
+        assert_eq!(w, 400);
+        assert_eq!(h_empty, 48);
+        assert_eq!(dur_empty, 2600);
+
+        let (_, h_short, dur_short) = compute_toast_dims("已复制图片", 1.0);
+        assert!(h_short >= 82);
+        assert_eq!(dur_short, 3200);
+
+        let long_text = "这是一段较长的文字，用于测试在多行情况下高度是否能够正确计算并伸展，避免文字被截断。\
+            包含大量描述信息以及文件路径：C:\\Users\\zhong\\Pictures\\Screenshots\\2026-09-17 22-18-04.png。";
+        let (_, h_long, dur_long) = compute_toast_dims(long_text, 1.0);
+        assert!(h_long > h_short);
+        assert!(h_long <= 220);
+        assert_eq!(dur_long, 4500);
+    }
+}
+
