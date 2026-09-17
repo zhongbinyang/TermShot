@@ -1,13 +1,19 @@
 use crate::bitmap::Bitmap;
-use crate::draw::fill_rect;
 use crate::geom::{Color, Point, Rect};
-use crate::native::{dpi_scale_hwnd, fill_rect_hdc, hinstance, key_down, place_topmost, sc, stroke_rect_hdc, virtual_screen};
+use crate::native::{
+    dpi_scale_at, dpi_scale_hwnd, fill_rect_hdc, hinstance, key_down, place_topmost, sc,
+    stroke_rect_hdc, virtual_screen,
+};
 use crate::theme;
 use crate::util::wide;
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, CombineRgn, CreateRectRgn, DeleteObject, EndPaint, InvalidateRect, SetWindowRgn,
-    PAINTSTRUCT, RGN_OR,
+    BeginPaint, BitBlt, CombineRgn, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW,
+    CreatePen, CreateRectRgn, CreateSolidBrush, DeleteDC, DeleteObject, DrawTextW, EndPaint,
+    InvalidateRect, RoundRect, SelectObject, SetBkMode, SetTextColor, SetWindowRgn,
+    CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DT_CENTER, DT_LEFT, DT_NOPREFIX,
+    DT_SINGLELINE, DT_VCENTER, FW_BOLD, FW_NORMAL, OUT_DEFAULT_PRECIS, PAINTSTRUCT, PS_SOLID,
+    RGN_OR, SRCCOPY, TRANSPARENT,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{VK_ESCAPE, VK_RETURN};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -28,6 +34,7 @@ pub enum HudDecision {
 struct Hud {
     region: Rect,
     vs: Rect,
+    scale: f32,
     height: i32,
     hole: Rect,
     bar: Rect,
@@ -44,9 +51,13 @@ pub fn run_scroll(region: Rect) -> Option<Bitmap> {
         return None;
     }
 
+    let center = Point::new(region.x + region.w / 2, region.y + region.h / 2);
+    let initial_scale = dpi_scale_at(center).max(1.0);
+
     let mut hud = Box::new(Hud {
         region,
         vs,
+        scale: initial_scale,
         height: region.h,
         hole: Rect::default(),
         bar: Rect::default(),
@@ -175,60 +186,177 @@ unsafe extern "system" fn hud_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
         WM_PAINT => {
             let mut ps = PAINTSTRUCT::default();
             let hdc = BeginPaint(hwnd, &mut ps);
-            let scale = dpi_scale_hwnd(hwnd).max(1.0);
-            fill_rect_hdc(hdc, hud.hole.inflate(4, 4), Color::argb(220, 8, 10, 14));
-            stroke_rect_hdc(hdc, hud.hole, theme::ACCENT, sc(2, scale).max(1));
+            let scale = hud.scale.max(1.0);
+            let border_w = sc(2, scale).max(1);
+
+            // Selection border and mask
+            fill_rect_hdc(hdc, hud.hole.inflate(border_w + 1, border_w + 1), Color::argb(220, 8, 10, 14));
+            stroke_rect_hdc(hdc, hud.hole, theme::ACCENT, border_w);
 
             if hud.bar.w > 4 && hud.bar.h > 4 {
-                let mut frame = Bitmap::new(hud.bar.w, hud.bar.h);
-                // Background
-                fill_rect(&mut frame, 0, 0, hud.bar.w, hud.bar.h, Color::argb(246, 20, 26, 36));
+                let mem_dc = CreateCompatibleDC(hdc);
+                let mem_bmp = CreateCompatibleBitmap(hdc, hud.bar.w, hud.bar.h);
+                let old_bmp = SelectObject(mem_dc, mem_bmp);
 
-                // Status text
-                let status_msg = format!("用滚轮向下滚动  ·  高度: {} px", hud.height);
-                crate::draw::draw_text(
-                    &mut frame,
-                    Point::new(sc(14, scale), (hud.bar.h - sc(15, scale)) / 2),
-                    &status_msg,
-                    theme::TEXT,
-                    sc(13, scale),
+                let card_round = sc(8, scale);
+                let btn_round = sc(6, scale);
+
+                // 1. Draw HUD Container Card (Modern rounded card with border)
+                let bar_brush = CreateSolidBrush(COLORREF(Color::rgb(20, 26, 36).colorref()));
+                let bar_pen = CreatePen(PS_SOLID, 1, COLORREF(Color::rgb(46, 58, 76).colorref()));
+                let old_brush = SelectObject(mem_dc, bar_brush);
+                let old_pen = SelectObject(mem_dc, bar_pen);
+                let _ = RoundRect(mem_dc, 0, 0, hud.bar.w, hud.bar.h, card_round, card_round);
+
+                // 2. Status text (Vertically centered, YaHei UI, ClearType)
+                let font_title = CreateFontW(
+                    -sc(13, scale),
+                    0, 0, 0,
+                    FW_NORMAL.0 as i32,
+                    0, 0, 0,
+                    DEFAULT_CHARSET.0 as u32,
+                    OUT_DEFAULT_PRECIS.0 as u32,
+                    CLIP_DEFAULT_PRECIS.0 as u32,
+                    CLEARTYPE_QUALITY.0 as u32,
+                    0,
+                    windows::core::w!("Microsoft YaHei UI"),
+                );
+                let font_btn = CreateFontW(
+                    -sc(12, scale),
+                    0, 0, 0,
+                    FW_BOLD.0 as i32,
+                    0, 0, 0,
+                    DEFAULT_CHARSET.0 as u32,
+                    OUT_DEFAULT_PRECIS.0 as u32,
+                    CLIP_DEFAULT_PRECIS.0 as u32,
+                    CLEARTYPE_QUALITY.0 as u32,
+                    0,
+                    windows::core::w!("Microsoft YaHei UI"),
                 );
 
-                // Done button (Accent CTA)
-                let done_bg = if hud.hover == 0 {
-                    theme::ACCENT_HI
-                } else {
-                    theme::ACCENT
+                SetBkMode(mem_dc, TRANSPARENT);
+                SetTextColor(mem_dc, COLORREF(theme::TEXT.colorref()));
+                let old_font = SelectObject(mem_dc, font_title);
+
+                let status_msg = format!("用滚轮向下滚动  ·  高度: {} px", hud.height);
+                let mut wt_status = wide(&status_msg);
+                let text_max_right = (hud.done_btn.x - hud.bar.x - sc(12, scale)).max(sc(100, scale));
+                let mut status_rc = RECT {
+                    left: sc(16, scale),
+                    top: 0,
+                    right: text_max_right,
+                    bottom: hud.bar.h,
                 };
+                DrawTextW(
+                    mem_dc,
+                    &mut wt_status,
+                    &mut status_rc,
+                    DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
+                );
+
+                // 3. [ ✓ 完成 ] Button (CTA Accent)
+                SelectObject(mem_dc, font_btn);
+                let (done_bg, done_pen_col, done_fg) = if hud.hover == 0 {
+                    (theme::ACCENT_HI, theme::ACCENT_HI, Color::rgb(0x06, 0x22, 0x1B))
+                } else {
+                    (theme::ACCENT, theme::ACCENT, Color::rgb(0x06, 0x22, 0x1B))
+                };
+                let done_brush = CreateSolidBrush(COLORREF(done_bg.colorref()));
+                let done_pen = CreatePen(PS_SOLID, 1, COLORREF(done_pen_col.colorref()));
+                SelectObject(mem_dc, done_brush);
+                SelectObject(mem_dc, done_pen);
+
                 let done_rx = hud.done_btn.x - hud.bar.x;
                 let done_ry = hud.done_btn.y - hud.bar.y;
-                fill_rect(&mut frame, done_rx, done_ry, hud.done_btn.w, hud.done_btn.h, done_bg);
-                crate::draw::draw_text(
-                    &mut frame,
-                    Point::new(done_rx + sc(14, scale), done_ry + sc(5, scale)),
-                    "✓ 完成",
-                    Color::rgb(0x06, 0x22, 0x1B),
-                    sc(12, scale),
+                let mut done_rc = RECT {
+                    left: done_rx,
+                    top: done_ry,
+                    right: done_rx + hud.done_btn.w,
+                    bottom: done_ry + hud.done_btn.h,
+                };
+                let _ = RoundRect(
+                    mem_dc,
+                    done_rc.left,
+                    done_rc.top,
+                    done_rc.right,
+                    done_rc.bottom,
+                    btn_round,
+                    btn_round,
+                );
+                SetTextColor(mem_dc, COLORREF(done_fg.colorref()));
+                let mut wt_done = wide("✓ 完成");
+                DrawTextW(
+                    mem_dc,
+                    &mut wt_done,
+                    &mut done_rc,
+                    DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
                 );
 
-                // Cancel button
-                let cancel_bg = if hud.hover == 1 {
-                    Color::argb(255, 42, 54, 70)
+                // 4. [ ✕ 取消 ] Button
+                let (cancel_bg, cancel_pen_col, cancel_fg) = if hud.hover == 1 {
+                    (theme::HOVER_BG, Color::rgb(0x42, 0x54, 0x6E), theme::TEXT)
                 } else {
-                    Color::argb(255, 28, 36, 48)
+                    (theme::PANEL, Color::rgb(0x35, 0x43, 0x58), theme::TEXT)
                 };
+                let cancel_brush = CreateSolidBrush(COLORREF(cancel_bg.colorref()));
+                let cancel_pen = CreatePen(PS_SOLID, 1, COLORREF(cancel_pen_col.colorref()));
+                SelectObject(mem_dc, cancel_brush);
+                SelectObject(mem_dc, cancel_pen);
+
                 let cancel_rx = hud.cancel_btn.x - hud.bar.x;
                 let cancel_ry = hud.cancel_btn.y - hud.bar.y;
-                fill_rect(&mut frame, cancel_rx, cancel_ry, hud.cancel_btn.w, hud.cancel_btn.h, cancel_bg);
-                crate::draw::draw_text(
-                    &mut frame,
-                    Point::new(cancel_rx + sc(14, scale), cancel_ry + sc(5, scale)),
-                    "✕ 取消",
-                    theme::TEXT,
-                    sc(12, scale),
+                let mut cancel_rc = RECT {
+                    left: cancel_rx,
+                    top: cancel_ry,
+                    right: cancel_rx + hud.cancel_btn.w,
+                    bottom: cancel_ry + hud.cancel_btn.h,
+                };
+                let _ = RoundRect(
+                    mem_dc,
+                    cancel_rc.left,
+                    cancel_rc.top,
+                    cancel_rc.right,
+                    cancel_rc.bottom,
+                    btn_round,
+                    btn_round,
+                );
+                SetTextColor(mem_dc, COLORREF(cancel_fg.colorref()));
+                let mut wt_cancel = wide("✕ 取消");
+                DrawTextW(
+                    mem_dc,
+                    &mut wt_cancel,
+                    &mut cancel_rc,
+                    DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
                 );
 
-                frame.blit_to_hdc(hdc, hud.bar);
+                // 5. Blit to Screen DC
+                let _ = BitBlt(
+                    hdc,
+                    hud.bar.x,
+                    hud.bar.y,
+                    hud.bar.w,
+                    hud.bar.h,
+                    mem_dc,
+                    0,
+                    0,
+                    SRCCOPY,
+                );
+
+                // Cleanup GDI objects
+                SelectObject(mem_dc, old_brush);
+                SelectObject(mem_dc, old_pen);
+                SelectObject(mem_dc, old_font);
+                SelectObject(mem_dc, old_bmp);
+                let _ = DeleteObject(bar_brush);
+                let _ = DeleteObject(bar_pen);
+                let _ = DeleteObject(done_brush);
+                let _ = DeleteObject(done_pen);
+                let _ = DeleteObject(cancel_brush);
+                let _ = DeleteObject(cancel_pen);
+                let _ = DeleteObject(font_title);
+                let _ = DeleteObject(font_btn);
+                let _ = DeleteObject(mem_bmp);
+                let _ = DeleteDC(mem_dc);
             }
             let _ = EndPaint(hwnd, &ps);
             LRESULT(0)
@@ -298,11 +426,17 @@ impl Hud {
         let x2 = (self.region.right() - self.vs.x) * cw / vw;
         let y2 = (self.region.bottom() - self.vs.y) * ch / vh;
         self.hole = Rect::from_ltrb(x1, y1, x2.max(x1 + 1), y2.max(y1 + 1));
-        let scale = dpi_scale_hwnd(hwnd).max(1.0);
-        let bar_h = sc(40, scale);
-        let pad = sc(8, scale);
-        let btn_w = sc(72, scale);
-        let bar_w = sc(400, scale);
+
+        let center = Point::new(self.region.x + self.region.w / 2, self.region.y + self.region.h / 2);
+        let scale = crate::native::dpi_scale_at(center)
+            .max(dpi_scale_hwnd(hwnd))
+            .max(1.0);
+        self.scale = scale;
+
+        let bar_h = sc(42, scale);
+        let pad = sc(10, scale);
+        let btn_w = sc(84, scale);
+        let bar_w = sc(420, scale);
         let mut x = self.hole.x + (self.hole.w - bar_w) / 2;
         let mut y = self.hole.bottom() + pad;
         if y + bar_h > ch - 4 {
@@ -317,12 +451,13 @@ impl Hud {
         self.cancel_btn = Rect::new(self.bar.right() - pad - btn_w, by, btn_w, bh);
         self.done_btn = Rect::new(self.cancel_btn.x - sc(8, scale) - btn_w, by, btn_w, bh);
 
+        let border_w = sc(3, scale).max(3);
         unsafe {
             let outer = CreateRectRgn(
-                self.hole.x - 4,
-                self.hole.y - 4,
-                self.hole.right() + 4,
-                self.hole.bottom() + 4,
+                self.hole.x - border_w,
+                self.hole.y - border_w,
+                self.hole.right() + border_w,
+                self.hole.bottom() + border_w,
             );
             let inner = CreateRectRgn(self.hole.x, self.hole.y, self.hole.right(), self.hole.bottom());
             let bar = CreateRectRgn(self.bar.x, self.bar.y, self.bar.right(), self.bar.bottom());
