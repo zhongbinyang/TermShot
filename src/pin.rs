@@ -120,12 +120,17 @@ fn spawn_ocr(hwnd: HWND, settings: Settings) {
                 return;
             }
             let payload = Box::new(result);
-            let _ = PostMessageW(
+            let ptr = Box::into_raw(payload);
+            if PostMessageW(
                 hwnd,
                 WM_OCR_DONE,
                 WPARAM(0),
-                LPARAM(Box::into_raw(payload) as isize),
-            );
+                LPARAM(ptr as isize),
+            )
+            .is_err()
+            {
+                drop(Box::from_raw(ptr));
+            }
         }
     });
 }
@@ -159,9 +164,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut Pin;
             if !ptr.is_null() {
                 (*ptr).ocr_busy = false;
-                match *r {
-                    Ok(t) => (*ptr).full_text = Some(t),
-                    Err(_) => {}
+                if let Ok(t) = *r {
+                    (*ptr).full_text = Some(t);
                 }
             }
         }

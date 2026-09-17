@@ -229,9 +229,8 @@ fn start_capture(app: &mut App, scroll_after: bool) {
         if is_window(prev) {
             set_foreground(prev);
         }
-        match crate::scroll::run_scroll(rect) {
-            Some(bmp) => finish(app, bmp, rect, None),
-            None => {}
+        if let Some(bmp) = crate::scroll::run_scroll(rect) {
+            finish(app, bmp, rect, None);
         }
         app.busy = false;
         return;

@@ -203,8 +203,12 @@ fn create_hicon_size(size: i32) -> Option<HICON> {
             }
         }
         let mask = CreateBitmap(size, size, 1, 1, Some(and_mask.as_ptr() as *const _));
+        if mask.is_invalid() {
+            return None;
+        }
         let color = CreateBitmap(size, size, 1, 32, Some(bmp.pixels.as_ptr() as *const _));
-        if mask.is_invalid() || color.is_invalid() {
+        if color.is_invalid() {
+            let _ = DeleteObject(mask);
             return None;
         }
         let info = ICONINFO {

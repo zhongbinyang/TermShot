@@ -96,12 +96,22 @@ fn same_path(a: &Path, b: &Path) -> bool {
     fa == fb
 }
 
+struct ComScope;
+impl Drop for ComScope {
+    fn drop(&mut self) {
+        unsafe {
+            CoUninitialize();
+        }
+    }
+}
+
 fn create_shortcut(link: &Path, target: &Path, desc: &str) -> Result<(), String> {
     if let Some(p) = link.parent() {
         std::fs::create_dir_all(p).map_err(|e| e.to_string())?;
     }
     unsafe {
         CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok().map_err(|e| e.to_string())?;
+        let _guard = ComScope;
         let sl: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)
             .map_err(|e| e.to_string())?;
         let t = wide(&target.display().to_string());
@@ -121,7 +131,6 @@ fn create_shortcut(link: &Path, target: &Path, desc: &str) -> Result<(), String>
         let lp = wide(&link.display().to_string());
         pf.Save(windows::core::PCWSTR(lp.as_ptr()), true)
             .map_err(|e| e.to_string())?;
-        CoUninitialize();
     }
     Ok(())
 }

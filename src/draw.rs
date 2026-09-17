@@ -21,7 +21,7 @@ pub fn stroke_line(bmp: &mut Bitmap, x0: f32, y0: f32, x1: f32, y1: f32, c: Colo
         return;
     }
     let steps = ((len * 2.0 + width * 2.0).ceil() as i32).clamp(1, 16384);
-    let r = (width / 2.0).max(0.6).min(64.0);
+    let r = (width / 2.0).clamp(0.6, 64.0);
     for i in 0..=steps {
         let t = i as f32 / steps as f32;
         fill_circle(bmp, x0 + dx * t, y0 + dy * t, r, c);
@@ -76,7 +76,7 @@ pub fn stroke_ellipse(bmp: &mut Bitmap, x: f32, y: f32, w: f32, h: f32, c: Color
     if w < 1.0 || h < 1.0 || !w.is_finite() || !h.is_finite() {
         return;
     }
-    let steps = ((w + h) * 2.0).max(32.0).min(2048.0) as i32;
+    let steps = ((w + h) * 2.0).clamp(32.0, 2048.0) as i32;
     let mut prev = (x + w, y + h / 2.0);
     for i in 0..=steps {
         let a = i as f32 / steps as f32 * std::f32::consts::TAU;
@@ -157,7 +157,7 @@ pub fn draw_text(bmp: &mut Bitmap, at: Point, text: &str, color: Color, px: i32)
                 biHeight: -h,
                 biPlanes: 1,
                 biBitCount: 32,
-                biCompression: BI_RGB.0 as u32,
+                biCompression: BI_RGB.0,
                 ..Default::default()
             },
             ..Default::default()
@@ -277,7 +277,7 @@ pub fn paint_arrow_hdc(
         (back_x + uy * head_half).round() as i32,
         (back_y - ux * head_half).round() as i32,
     );
-    let pw = width.round().max(1.0).min(24.0) as i32;
+    let pw = width.round().clamp(1.0, 24.0) as i32;
     crate::native::line_hdc(hdc, to.x, to.y, left.x, left.y, color, pw);
     crate::native::line_hdc(hdc, to.x, to.y, right.x, right.y, color, pw);
     crate::native::line_hdc(hdc, left.x, left.y, right.x, right.y, color, pw);

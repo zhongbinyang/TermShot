@@ -165,6 +165,17 @@ pub fn run(
                 PostQuitMessage(msg.wParam.0 as i32);
                 break;
             }
+            if !state.edit.is_invalid() && msg.message == WM_KEYDOWN {
+                if msg.wParam.0 as u32 == VK_RETURN.0 as u32 {
+                    state.end_text(hwnd, true);
+                    state.invalidate(hwnd);
+                    continue;
+                } else if msg.wParam.0 as u32 == VK_ESCAPE.0 as u32 {
+                    state.end_text(hwnd, false);
+                    state.invalidate(hwnd);
+                    continue;
+                }
+            }
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
@@ -904,9 +915,9 @@ impl OverlayState {
 fn veil_shot(shot: &Bitmap) -> Bitmap {
     let mut v = shot.clone();
     for p in v.pixels.iter_mut() {
-        let b = (*p & 0xFF) as u32;
-        let g = ((*p >> 8) & 0xFF) as u32;
-        let r = ((*p >> 16) & 0xFF) as u32;
+        let b = *p & 0xFF;
+        let g = (*p >> 8) & 0xFF;
+        let r = (*p >> 16) & 0xFF;
         let nb = (b * 40 + 6 * 215) / 255;
         let ng = (g * 40 + 8 * 215) / 255;
         let nr = (r * 40 + 12 * 215) / 255;

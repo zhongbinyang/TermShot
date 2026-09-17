@@ -303,6 +303,7 @@ impl ActionToolbar {
         true
     }
 
+    #[allow(dead_code)]
     pub fn paint(&self, dest: &mut crate::bitmap::Bitmap, scale: f32) {
         self.paint_at(dest, scale, Point::new(0, 0));
     }
@@ -490,7 +491,7 @@ impl ActionToolbar {
 
     fn paint_palette(&self, dest: &mut crate::bitmap::Bitmap, scale: f32, origin: Point) {
         if self.show_color {
-            for i in 0..COLORS.len() {
+            for (i, &col) in COLORS.iter().enumerate() {
                 let r = Rect::new(
                     self.swatches[i].x - origin.x,
                     self.swatches[i].y - origin.y,
@@ -505,7 +506,7 @@ impl ActionToolbar {
                     r.x as f32 + r.w as f32 / 2.0,
                     r.y as f32 + r.h as f32 / 2.0,
                     r.w as f32 / 2.0,
-                    COLORS[i],
+                    col,
                 );
             }
         }

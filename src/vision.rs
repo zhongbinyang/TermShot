@@ -98,12 +98,19 @@ fn generate(bmp: &Bitmap, settings: &Settings, prompt: &str, system: Option<&str
         "temperature": 0,
         "messages": messages
     });
-    let resp = ureq::post(URL)
+    let resp = match ureq::post(URL)
         .set("Authorization", &format!("Bearer {key}"))
         .set("Content-Type", "application/json")
         .timeout(std::time::Duration::from_secs(180))
         .send_string(&body.to_string())
-        .map_err(|e| format!("DeepSeek: {e}"))?;
+    {
+        Ok(r) => r,
+        Err(ureq::Error::Status(status, resp)) => {
+            let text = resp.into_string().unwrap_or_default();
+            return Err(format!("DeepSeek {status}: {}", trim_err(&text)));
+        }
+        Err(e) => return Err(format!("DeepSeek: {e}")),
+    };
     let status = resp.status();
     let text = resp.into_string().unwrap_or_default();
     if status != 200 {
@@ -175,9 +182,11 @@ fn clean_text(raw: &str, json_keys: &[&str]) -> Option<String> {
     static HY: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
     let hy = HY.get_or_init(|| Regex::new(r"([A-Za-z]{2,})-\n\s*([A-Za-z]{2,})").unwrap());
     text = hy.replace_all(&text, "$1$2").to_string();
-    static SP: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
-    let sp = SP.get_or_init(|| Regex::new(r"[ \t]+(?=\n)").unwrap());
-    text = sp.replace_all(&text, "").to_string();
+    text = text
+        .lines()
+        .map(|l| l.trim_end_matches([' ', '\t']))
+        .collect::<Vec<_>>()
+        .join("\n");
     static NL: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
     let nl = NL.get_or_init(|| Regex::new(r"\n{3,}").unwrap());
     text = nl.replace_all(&text, "\n\n").to_string();

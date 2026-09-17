@@ -73,7 +73,7 @@ pub fn sc(v: i32, scale: f32) -> i32 {
 }
 
 pub fn small_icon_size() -> i32 {
-    unsafe { GetSystemMetrics(SM_CXSMICON) }.max(16).min(64)
+    unsafe { GetSystemMetrics(SM_CXSMICON) }.clamp(16, 64)
 }
 
 pub fn stroke_rect_hdc(hdc: HDC, r: Rect, c: Color, width: i32) {
@@ -378,7 +378,7 @@ pub fn fill_rect_hdc(hdc: HDC, r: Rect, c: Color) {
 pub fn line_hdc(hdc: HDC, x0: i32, y0: i32, x1: i32, y1: i32, c: Color, width: i32) {
     // Overlay WM_PAINT HDCs have aborted inside CreatePen/LineTo/Polygon.
     // Rectangles work because they only FillRect — match that here.
-    let w = width.max(1).min(24);
+    let w = width.clamp(1, 24);
     let dx = x1 as i64 - x0 as i64;
     let dy = y1 as i64 - y0 as i64;
     let mut steps = dx.abs().max(dy.abs());
@@ -420,8 +420,8 @@ pub fn polygon_fill_hdc(hdc: HDC, pts: &[Point], c: Color) {
     let b = pts[pts.len() - 1];
     line_hdc(hdc, a.x, a.y, b.x, b.y, c, w);
     let origin = pts[0];
-    for i in 1..pts.len() {
-        line_hdc(hdc, origin.x, origin.y, pts[i].x, pts[i].y, c, w.max(3));
+    for pt in pts.iter().skip(1) {
+        line_hdc(hdc, origin.x, origin.y, pt.x, pt.y, c, w.max(3));
     }
 }
 
@@ -429,7 +429,7 @@ pub fn ellipse_stroke_hdc(hdc: HDC, r: Rect, c: Color, width: i32) {
     if r.w < 1 || r.h < 1 {
         return;
     }
-    let w = width.max(1).min(24);
+    let w = width.clamp(1, 24);
     let cx = r.x as f32 + r.w as f32 * 0.5;
     let cy = r.y as f32 + r.h as f32 * 0.5;
     let rx = (r.w as f32 * 0.5).max(1.0);

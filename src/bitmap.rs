@@ -123,6 +123,7 @@ impl Bitmap {
         out
     }
 
+    #[allow(dead_code)]
     pub fn blit_from(&mut self, src: &Bitmap, dest: Point, src_rect: Rect) {
         let sr = src_rect.intersect(Rect::new(0, 0, src.width, src.height));
         for y in 0..sr.h {
@@ -140,6 +141,7 @@ impl Bitmap {
         }
     }
 
+    #[allow(dead_code)]
     pub fn overlay_copy(&mut self, src: &Bitmap, dest: Point, src_rect: Rect) {
         let sr = src_rect.intersect(Rect::new(0, 0, src.width, src.height));
         for y in 0..sr.h {
@@ -154,7 +156,7 @@ impl Bitmap {
         for y in 0..self.height {
             for x in 0..self.width {
                 let c = self.get(x, y);
-                img.put_pixel(x as u32, y as u32, image::Rgba([c.r, c.g, c.b, c.a.max(255)]));
+                img.put_pixel(x as u32, y as u32, image::Rgba([c.r, c.g, c.b, 255]));
             }
         }
         let mut buf = Vec::new();
@@ -332,7 +334,7 @@ fn dib_info(w: i32, h: i32) -> BITMAPINFO {
             biHeight: -h,
             biPlanes: 1,
             biBitCount: 32,
-            biCompression: BI_RGB.0 as u32,
+            biCompression: BI_RGB.0,
             biSizeImage: (w * h * 4) as u32,
             ..Default::default()
         },
@@ -354,10 +356,20 @@ pub fn capture_rect(screen: Rect) -> Result<Bitmap, String> {
             return Err("无法获取屏幕 DC".into());
         }
         let hdc_mem = CreateCompatibleDC(hdc_screen);
+        if hdc_mem.is_invalid() {
+            ReleaseDC(HWND::default(), hdc_screen);
+            return Err("无法创建内存 DC".into());
+        }
         let mut bits: *mut core::ffi::c_void = std::ptr::null_mut();
         let info = dib_info(screen.w, screen.h);
-        let hbmp = CreateDIBSection(hdc_mem, &info, DIB_RGB_COLORS, &mut bits, None, 0)
-            .map_err(|e| e.to_string())?;
+        let hbmp = match CreateDIBSection(hdc_mem, &info, DIB_RGB_COLORS, &mut bits, None, 0) {
+            Ok(h) => h,
+            Err(e) => {
+                let _ = DeleteDC(hdc_mem);
+                ReleaseDC(HWND::default(), hdc_screen);
+                return Err(e.to_string());
+            }
+        };
         let old = SelectObject(hdc_mem, hbmp);
         let ok = BitBlt(
             hdc_mem,
@@ -416,4 +428,39 @@ pub fn try_save_png(bmp: &Bitmap, settings: &Settings) -> Result<PathBuf, String
     let path = next_png_path(&dir);
     bmp.save_png(&path)?;
     Ok(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_bitmap_pixel_operations() {
+        let mut bmp = Bitmap::new(10, 10);
+        assert_eq!(bmp.width, 10);
+        assert_eq!(bmp.height, 10);
+
+        let color = Color::rgb(255, 0, 128);
+        bmp.set(3, 4, color);
+        assert_eq!(bmp.get(3, 4).r, 255);
+        assert_eq!(bmp.get(3, 4).g, 0);
+        assert_eq!(bmp.get(3, 4).b, 128);
+
+        let cropped = bmp.crop(Rect::new(2, 3, 4, 4));
+        assert_eq!(cropped.width, 4);
+        assert_eq!(cropped.height, 4);
+        assert_eq!(cropped.get(1, 1).r, 255);
+        assert_eq!(cropped.get(1, 1).g, 0);
+        assert_eq!(cropped.get(1, 1).b, 128);
+    }
+
+    #[test]
+    fn test_to_png_bytes() {
+        let mut bmp = Bitmap::new(8, 8);
+        bmp.set(0, 0, Color::rgb(255, 255, 255));
+        let png = bmp.to_png_bytes().expect("valid PNG");
+        assert!(png.len() > 8);
+        // PNG signature: 137 80 78 71 13 10 26 10
+        assert_eq!(&png[..8], &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]);
+    }
 }

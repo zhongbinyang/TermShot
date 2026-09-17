@@ -1,5 +1,5 @@
 use crate::bitmap::Bitmap;
-use windows::Win32::Foundation::{HANDLE, HWND};
+use windows::Win32::Foundation::{GlobalFree, HANDLE, HWND};
 use windows::Win32::Graphics::Gdi::{BITMAPINFOHEADER, BI_RGB};
 use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
@@ -18,13 +18,18 @@ pub fn set_text(text: &str) -> bool {
         let h = GlobalAlloc(GMEM_MOVEABLE, bytes)?;
         let ptr = GlobalLock(h);
         if ptr.is_null() {
-            CloseClipboard()?;
+            let _ = GlobalFree(h);
+            let _ = CloseClipboard();
             return Err(windows::core::Error::from_win32());
         }
         std::ptr::copy_nonoverlapping(wide.as_ptr() as *const u8, ptr as *mut u8, bytes);
         let _ = GlobalUnlock(h);
-        SetClipboardData(13u32, HANDLE(h.0))?; // CF_UNICODETEXT
-        CloseClipboard()?;
+        if SetClipboardData(13u32, HANDLE(h.0)).is_err() {
+            let _ = GlobalFree(h);
+            let _ = CloseClipboard();
+            return Err(windows::core::Error::from_win32());
+        }
+        let _ = CloseClipboard();
         Ok(())
     })
 }
@@ -49,7 +54,8 @@ pub fn set_image(bmp: &Bitmap) -> bool {
         let h = GlobalAlloc(GMEM_MOVEABLE, total)?;
         let ptr = GlobalLock(h) as *mut u8;
         if ptr.is_null() {
-            CloseClipboard()?;
+            let _ = GlobalFree(h);
+            let _ = CloseClipboard();
             return Err(windows::core::Error::from_win32());
         }
         let hdr = BITMAPINFOHEADER {
@@ -58,7 +64,7 @@ pub fn set_image(bmp: &Bitmap) -> bool {
             biHeight: bmp.height, // bottom-up
             biPlanes: 1,
             biBitCount: 32,
-            biCompression: BI_RGB.0 as u32,
+            biCompression: BI_RGB.0,
             biSizeImage: pix_size as u32,
             ..Default::default()
         };
@@ -75,8 +81,12 @@ pub fn set_image(bmp: &Bitmap) -> bool {
             }
         }
         let _ = GlobalUnlock(h);
-        SetClipboardData(8u32, HANDLE(h.0))?; // CF_DIB
-        CloseClipboard()?;
+        if SetClipboardData(8u32, HANDLE(h.0)).is_err() {
+            let _ = GlobalFree(h);
+            let _ = CloseClipboard();
+            return Err(windows::core::Error::from_win32());
+        }
+        let _ = CloseClipboard();
         Ok(())
     })
 }

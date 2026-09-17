@@ -423,6 +423,7 @@ impl PinAsk {
         }
     }
 
+    #[allow(dead_code)]
     fn map_bmp_rect(&self, r: Rect) -> Rect {
         let ic = self.image_client;
         if self.bmp.width <= 0 || self.bmp.height <= 0 {

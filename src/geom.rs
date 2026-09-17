@@ -96,3 +96,34 @@ impl Color {
         Self { a, ..self }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_rect_operations() {
+        let r1 = Rect::new(10, 20, 100, 80);
+        assert_eq!(r1.right(), 110);
+        assert_eq!(r1.bottom(), 100);
+        assert!(r1.contains(Point::new(50, 50)));
+        assert!(!r1.contains(Point::new(5, 5)));
+        assert_eq!(r1.center(), Point::new(60, 60));
+
+        let r2 = Rect::new(50, 60, 100, 100);
+        let intersection = r1.intersect(r2);
+        assert_eq!(intersection, Rect::new(50, 60, 60, 40));
+
+        let inflated = r1.inflate(5, 10);
+        assert_eq!(inflated, Rect::new(5, 10, 110, 100));
+    }
+
+    #[test]
+    fn test_color_encoding() {
+        let c = Color::argb(255, 0x12, 0x34, 0x56);
+        assert_eq!(c.colorref(), 0x00563412); // 0x00BBGGRR
+        assert_eq!(c.bgra(), 0xFF123456);     // 0xAARRGGBB in byte order B, G, R, A
+        let transparent = c.with_alpha(128);
+        assert_eq!(transparent.a, 128);
+    }
+}

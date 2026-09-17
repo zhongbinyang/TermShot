@@ -93,6 +93,7 @@ impl AnnotationSession {
     pub fn has_draft(&self) -> bool {
         self.draft.is_some()
     }
+    #[allow(dead_code)]
     pub fn draft(&self) -> Option<&AnnotMark> {
         self.draft.as_ref()
     }
@@ -415,6 +416,7 @@ impl AnnotationSession {
     }
 
     /// Faster: paint layer + draft onto an already-copied screenshot dest covering dest_r.
+    #[allow(dead_code)]
     pub fn paint_over_shot(&self, dest: &mut Bitmap, src: crate::geom::Rect, dest_r: crate::geom::Rect) {
         if let Some(layer) = &self.layer {
             if dest_r.w > 0 && dest_r.h > 0 && src.w > 0 && src.h > 0 {
@@ -435,6 +437,7 @@ impl AnnotationSession {
         }
     }
 
+    #[allow(dead_code)]
     fn ensure_layer(&mut self) {
         if self.layer.is_some() {
             return;
@@ -444,6 +447,7 @@ impl AnnotationSession {
         }
     }
 
+    #[allow(dead_code)]
     fn rebuild_layer(&mut self) {
         self.layer = None;
         self.ensure_layer();
@@ -453,6 +457,7 @@ impl AnnotationSession {
         }
     }
 
+    #[allow(dead_code)]
     fn paint_on_layer(&mut self, mark: &AnnotMark) {
         self.ensure_layer();
         let Some(mut layer) = self.layer.take() else {
@@ -566,6 +571,7 @@ fn paint_mark(bmp: &mut Bitmap, m: &AnnotMark, preview: bool, source: Option<&Bi
 }
 
 impl AnnotMark {
+    #[allow(dead_code)]
     pub fn bounds(&self) -> crate::geom::Rect {
         let pad = ((self.width * 5.0).ceil() as i32).max(16);
         if let Some(path) = &self.path {

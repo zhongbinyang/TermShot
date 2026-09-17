@@ -1,3 +1,4 @@
+#![allow(clippy::too_many_arguments)]
 use crate::native::{cursor_pos, dpi_scale_at, enable_dark_title, hinstance, sc, set_font, ui_font, work_area_from_point};
 use crate::settings::{format_hotkey, PostCaptureAction, Settings};
 use crate::theme;
@@ -102,6 +103,10 @@ pub fn run(settings: Settings, on_suspend_hotkey: impl FnOnce()) -> Option<Setti
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
+        if !hwnd.is_invalid() && windows::Win32::UI::WindowsAndMessaging::IsWindow(hwnd).as_bool() {
+            let _ = DestroyWindow(hwnd);
+        }
+        let _ = DeleteObject(ui.font);
     }
     if ui.saved {
         Some(ui.settings.clone())

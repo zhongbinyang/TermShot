@@ -46,3 +46,24 @@ pub fn start_menu_programs() -> std::path::PathBuf {
     }
     local_app_data()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_wide_roundtrip() {
+        let original = "TermShot 终端截图 测试 123";
+        let w = wide(original);
+        assert_eq!(*w.last().unwrap(), 0);
+        let back = from_wide(&w);
+        assert_eq!(back, original);
+    }
+
+    #[test]
+    fn test_clamp_i32() {
+        assert_eq!(clamp_i32(5, 10, 20), 10);
+        assert_eq!(clamp_i32(15, 10, 20), 15);
+        assert_eq!(clamp_i32(25, 10, 20), 20);
+    }
+}

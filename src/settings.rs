@@ -5,10 +5,11 @@ use std::path::PathBuf;
 
 pub const DEFAULT_MODEL: &str = "deepseek-flash";
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 #[repr(u32)]
 pub enum PostCaptureAction {
+    #[default]
     Ask = 0,
     SaveImage = 1,
     CopyImage = 2,
@@ -16,12 +17,6 @@ pub enum PostCaptureAction {
     Pin = 4,
     CopyText = 5,
     Translate = 6,
-}
-
-impl Default for PostCaptureAction {
-    fn default() -> Self {
-        Self::Ask
-    }
 }
 
 impl PostCaptureAction {
