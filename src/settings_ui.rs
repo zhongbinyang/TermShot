@@ -18,17 +18,17 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::UI::Controls::{DRAWITEMSTRUCT, ODS_DISABLED, ODS_SELECTED};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT, VK_CONTROL, VK_ESCAPE, VK_MENU,
+    EnableWindow, GetKeyState, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT, VK_CONTROL, VK_ESCAPE, VK_MENU,
     VK_RETURN, VK_SHIFT,
 };
 use windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-    GetClientRect, GetMessageW, GetWindowTextW, LoadCursorW, RegisterClassExW, SendMessageW,
+    GetClientRect, GetMessageW, GetWindowTextW, LoadCursorW, MessageBoxW, PostMessageW, RegisterClassExW, SendMessageW,
     SetCursor, SetWindowLongPtrW, SetWindowTextW, ShowWindow,
     TranslateMessage, BN_CLICKED, BS_AUTOCHECKBOX, BS_OWNERDRAW, CBS_DROPDOWNLIST, CB_ADDSTRING,
     CB_GETCURSEL, CB_SETCURSEL, ES_AUTOHSCROLL, ES_PASSWORD, ES_READONLY, GWLP_USERDATA,
-    IDC_HAND, MSG, SW_HIDE, SW_SHOW, WINDOW_EX_STYLE, WM_COMMAND,
+    IDC_HAND, IDYES, MB_ICONWARNING, MB_YESNO, MSG, SW_HIDE, SW_SHOW, WINDOW_EX_STYLE, WM_APP, WM_CLOSE, WM_COMMAND,
     WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DRAWITEM,
     WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_MOUSEMOVE, WM_PAINT,
     WM_SETCURSOR, WM_SYSKEYDOWN, WNDCLASSEXW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_OVERLAPPED,
@@ -37,17 +37,25 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 const EM_SETPASSWORDCHAR: u32 = 0x00CC;
 const WM_MOUSELEAVE: u32 = 0x02A3;
+const WM_TEST_DONE: u32 = WM_APP + 70;
 
 
 const TAB_COUNT: usize = 4;
 const TAB_ITEMS: [(&str, &str); TAB_COUNT] = [
-    ("⚙", "通用偏好"),
-    ("⌨", "快捷按键"),
-    ("🤖", "AI 智能"),
-    ("ℹ", "关于软件"),
+    ("01", "通用偏好"),
+    ("02", "快捷按键"),
+    ("03", "AI 智能"),
+    ("04", "关于软件"),
 ];
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HotkeyTarget {
+    Capture,
+    Translate,
+}
+
 struct Ui {
+    original: Settings,
     settings: Settings,
     hwnd: HWND,
     active_tab: usize,
@@ -66,10 +74,14 @@ struct Ui {
     hotkey: HWND,
     record_btn: HWND,
     reset_btn: HWND,
+    translate_hotkey: HWND,
+    translate_record_btn: HWND,
+    translate_reset_btn: HWND,
 
     // Tab 2 controls
     key: HWND,
     toggle_key_btn: HWND,
+    test_api_btn: HWND,
     model: HWND,
 
     // Tab 3 controls
@@ -80,12 +92,15 @@ struct Ui {
     cancel_btn: HWND,
 
     // State
-    recording: bool,
+    recording: Option<HotkeyTarget>,
     show_key: bool,
     status_text: String,
     mods: u32,
     vk: u32,
+    translate_mods: u32,
+    translate_vk: u32,
     saved: bool,
+    testing_api: bool,
     scale: f32,
 
     // GDI resources
@@ -129,6 +144,9 @@ pub fn run(settings: Settings, on_suspend_hotkey: impl FnOnce()) -> Option<Setti
     let mut ui = Box::new(Ui {
         mods: settings.hotkey_modifiers,
         vk: settings.hotkey_key,
+        translate_mods: settings.translate_hotkey_modifiers,
+        translate_vk: settings.translate_hotkey_key,
+        original: settings.clone(),
         settings,
         hwnd: HWND::default(),
         active_tab: 0,
@@ -145,9 +163,13 @@ pub fn run(settings: Settings, on_suspend_hotkey: impl FnOnce()) -> Option<Setti
         hotkey: HWND::default(),
         record_btn: HWND::default(),
         reset_btn: HWND::default(),
+        translate_hotkey: HWND::default(),
+        translate_record_btn: HWND::default(),
+        translate_reset_btn: HWND::default(),
 
         key: HWND::default(),
         toggle_key_btn: HWND::default(),
+        test_api_btn: HWND::default(),
         model: HWND::default(),
 
         open_config_btn: HWND::default(),
@@ -155,10 +177,11 @@ pub fn run(settings: Settings, on_suspend_hotkey: impl FnOnce()) -> Option<Setti
         save_btn: HWND::default(),
         cancel_btn: HWND::default(),
 
-        recording: false,
+        recording: None,
         show_key: false,
         status_text: "提示: Esc 键关闭窗口，Enter 键保存配置".to_string(),
         saved: false,
+        testing_api: false,
         scale,
 
         font,
@@ -238,15 +261,11 @@ pub fn run(settings: Settings, on_suspend_hotkey: impl FnOnce()) -> Option<Setti
             // Intercept keyboard events for hotkey recording and dialog controls
             if msg.message == WM_KEYDOWN || msg.message == WM_SYSKEYDOWN {
                 let vk = msg.wParam.0 as u32;
-                if ui.recording {
+                if let Some(target) = ui.recording {
                     if vk == VK_ESCAPE.0 as u32 {
-                        ui.recording = false;
-                        let text = wide(&format_hotkey(ui.mods, ui.vk));
-                        let _ = SetWindowTextW(ui.hotkey, windows::core::PCWSTR(text.as_ptr()));
-                        let btn_text = wide("录制");
-                        let _ = SetWindowTextW(ui.record_btn, windows::core::PCWSTR(btn_text.as_ptr()));
+                        ui.recording = None;
+                        restore_hotkey_controls(ui.as_mut(), target);
                         set_status(ui.as_mut(), "已取消录制快捷键");
-                        let _ = windows::Win32::Graphics::Gdi::InvalidateRect(ui.record_btn, None, true);
                         continue;
                     }
 
@@ -266,6 +285,11 @@ pub fn run(settings: Settings, on_suspend_hotkey: impl FnOnce()) -> Option<Setti
                     if (GetKeyState(VK_MENU.0 as i32) as u16 & 0x8000) != 0 {
                         mods |= crate::native::MOD_ALT_BIT;
                     }
+                    if (GetKeyState(0x5B) as u16 & 0x8000) != 0
+                        || (GetKeyState(0x5C) as u16 & 0x8000) != 0
+                    {
+                        mods |= crate::native::MOD_WIN_BIT;
+                    }
 
                     if is_modifier {
                         let mut hint = String::new();
@@ -278,9 +302,13 @@ pub fn run(settings: Settings, on_suspend_hotkey: impl FnOnce()) -> Option<Setti
                         if mods & crate::native::MOD_ALT_BIT != 0 {
                             hint.push_str("Alt + ");
                         }
+                        if mods & crate::native::MOD_WIN_BIT != 0 {
+                            hint.push_str("Win + ");
+                        }
                         hint.push_str("...");
                         let w = wide(&hint);
-                        let _ = SetWindowTextW(ui.hotkey, windows::core::PCWSTR(w.as_ptr()));
+                        let (field, _) = hotkey_controls(ui.as_ref(), target);
+                        let _ = SetWindowTextW(field, windows::core::PCWSTR(w.as_ptr()));
                         continue;
                     }
 
@@ -290,23 +318,30 @@ pub fn run(settings: Settings, on_suspend_hotkey: impl FnOnce()) -> Option<Setti
                         continue;
                     }
 
-                    ui.mods = mods;
-                    ui.vk = vk;
-                    ui.recording = false;
-                    let text = wide(&format_hotkey(ui.mods, ui.vk));
-                    let _ = SetWindowTextW(ui.hotkey, windows::core::PCWSTR(text.as_ptr()));
-                    let btn_text = wide("录制");
-                    let _ = SetWindowTextW(ui.record_btn, windows::core::PCWSTR(btn_text.as_ptr()));
-                    set_status(ui.as_mut(), "新快捷键录制完成，点击“保存设置”生效");
-                    let _ = windows::Win32::Graphics::Gdi::InvalidateRect(ui.record_btn, None, true);
+                    set_hotkey_value(ui.as_mut(), target, mods, vk);
+                    ui.recording = None;
+                    restore_hotkey_controls(ui.as_mut(), target);
+                    if hotkeys_conflict(ui.as_ref()) {
+                        set_status(ui.as_mut(), "截图与翻译快捷键不能相同，请重新设置其中一组");
+                    } else {
+                        set_status(ui.as_mut(), "新快捷键录制完成，点击“保存设置”生效");
+                    }
                     continue;
                 } else if vk == VK_ESCAPE.0 as u32 {
-                    let _ = DestroyWindow(hwnd);
+                    let _ = SendMessageW(hwnd, WM_CLOSE, WPARAM(0), LPARAM(0));
                     continue;
                 } else if vk == VK_RETURN.0 as u32 {
-                    save_from_ui(ui.as_mut());
-                    ui.saved = true;
-                    let _ = DestroyWindow(hwnd);
+                    if hotkeys_conflict(ui.as_ref()) {
+                        set_status(ui.as_mut(), "截图与翻译快捷键不能相同，请修改后再保存");
+                    } else {
+                        match save_from_ui(ui.as_mut()) {
+                            Ok(()) => {
+                                ui.saved = true;
+                                let _ = DestroyWindow(hwnd);
+                            }
+                            Err(error) => set_status(ui.as_mut(), &error),
+                        }
+                    }
                     continue;
                 }
             }
@@ -361,6 +396,103 @@ fn set_status(ui: &mut Ui, text: &str) {
     unsafe {
         let _ = windows::Win32::Graphics::Gdi::InvalidateRect(ui.hwnd, Some(&rc), false);
     }
+}
+
+fn hotkey_controls(ui: &Ui, target: HotkeyTarget) -> (HWND, HWND) {
+    match target {
+        HotkeyTarget::Capture => (ui.hotkey, ui.record_btn),
+        HotkeyTarget::Translate => (ui.translate_hotkey, ui.translate_record_btn),
+    }
+}
+
+fn hotkey_value(ui: &Ui, target: HotkeyTarget) -> (u32, u32) {
+    match target {
+        HotkeyTarget::Capture => (ui.mods, ui.vk),
+        HotkeyTarget::Translate => (ui.translate_mods, ui.translate_vk),
+    }
+}
+
+fn set_hotkey_value(ui: &mut Ui, target: HotkeyTarget, modifiers: u32, key: u32) {
+    match target {
+        HotkeyTarget::Capture => {
+            ui.mods = modifiers;
+            ui.vk = key;
+        }
+        HotkeyTarget::Translate => {
+            ui.translate_mods = modifiers;
+            ui.translate_vk = key;
+        }
+    }
+}
+
+fn restore_hotkey_controls(ui: &Ui, target: HotkeyTarget) {
+    let (field, button) = hotkey_controls(ui, target);
+    let (modifiers, key) = hotkey_value(ui, target);
+    let value = wide(&format_hotkey(modifiers, key));
+    let button_text = wide("录制");
+    unsafe {
+        let _ = SetWindowTextW(field, windows::core::PCWSTR(value.as_ptr()));
+        let _ = SetWindowTextW(button, windows::core::PCWSTR(button_text.as_ptr()));
+        let _ = windows::Win32::Graphics::Gdi::InvalidateRect(button, None, true);
+    }
+}
+
+fn toggle_recording(ui: &mut Ui, target: HotkeyTarget) {
+    if let Some(previous) = ui.recording {
+        ui.recording = None;
+        restore_hotkey_controls(ui, previous);
+        if previous == target {
+            set_status(ui, "已取消录制快捷键");
+            return;
+        }
+    }
+
+    ui.recording = Some(target);
+    let (field, button) = hotkey_controls(ui, target);
+    let placeholder = wide("等待按下快捷键...");
+    let button_text = wide("停止录制");
+    unsafe {
+        let _ = SetWindowTextW(field, windows::core::PCWSTR(placeholder.as_ptr()));
+        let _ = SetWindowTextW(button, windows::core::PCWSTR(button_text.as_ptr()));
+        let _ = windows::Win32::Graphics::Gdi::InvalidateRect(button, None, true);
+    }
+    let purpose = match target {
+        HotkeyTarget::Capture => "截图",
+        HotkeyTarget::Translate => "剪贴板翻译",
+    };
+    set_status(
+        ui,
+        &format!("正在录制{purpose}快捷键，请按组合键；按 Esc 取消"),
+    );
+}
+
+fn reset_hotkey(ui: &mut Ui, target: HotkeyTarget) {
+    if let Some(previous) = ui.recording.take() {
+        restore_hotkey_controls(ui, previous);
+    }
+    let key = match target {
+        HotkeyTarget::Capture => 0x53,
+        HotkeyTarget::Translate => 0x54,
+    };
+    set_hotkey_value(
+        ui,
+        target,
+        crate::native::MOD_CONTROL_BIT | crate::native::MOD_SHIFT_BIT,
+        key,
+    );
+    restore_hotkey_controls(ui, target);
+    let value = format_hotkey(
+        crate::native::MOD_CONTROL_BIT | crate::native::MOD_SHIFT_BIT,
+        key,
+    );
+    set_status(
+        ui,
+        &format!("已恢复默认快捷键: {value}（点击保存后生效）"),
+    );
+}
+
+fn hotkeys_conflict(ui: &Ui) -> bool {
+    ui.mods == ui.translate_mods && ui.vk == ui.translate_vk
 }
 
 fn hit_tab(ui: &Ui, x: i32, y: i32) -> Option<usize> {
@@ -474,11 +606,36 @@ fn build_controls(ui: &mut Ui) {
         );
         let record_btn = owner_button(h, p(482), p(106), p(78), p(26), "录制", 103, ui.font);
         let reset_btn = owner_button(h, p(566), p(106), p(78), p(26), "恢复默认", 104, ui.font);
+        let translate_hotkey = edit(
+            h,
+            p(300),
+            p(150),
+            p(174),
+            p(26),
+            &ui.settings.format_translate_hotkey(),
+            false,
+            true,
+            ui.font,
+        );
+        let translate_record_btn =
+            owner_button(h, p(482), p(150), p(78), p(26), "录制", 107, ui.font);
+        let translate_reset_btn =
+            owner_button(h, p(566), p(150), p(78), p(26), "恢复默认", 108, ui.font);
 
         ui.hotkey = hotkey;
         ui.record_btn = record_btn;
         ui.reset_btn = reset_btn;
-        ui.tab_controls[1] = vec![hotkey, record_btn, reset_btn];
+        ui.translate_hotkey = translate_hotkey;
+        ui.translate_record_btn = translate_record_btn;
+        ui.translate_reset_btn = translate_reset_btn;
+        ui.tab_controls[1] = vec![
+            hotkey,
+            record_btn,
+            reset_btn,
+            translate_hotkey,
+            translate_record_btn,
+            translate_reset_btn,
+        ];
 
         // ================= Tab 2: AI 智能 =================
         let key = edit(
@@ -497,18 +654,20 @@ fn build_controls(ui: &mut Ui) {
             h,
             p(284),
             p(144),
-            p(360),
+            p(254),
             p(26),
             &ui.settings.model_name(),
             false,
             false,
             ui.font,
         );
+        let test_api_btn = owner_button(h, p(546), p(144), p(98), p(26), "验证连接", 109, ui.font);
 
         ui.key = key;
         ui.toggle_key_btn = toggle_key_btn;
+        ui.test_api_btn = test_api_btn;
         ui.model = model;
-        ui.tab_controls[2] = vec![key, toggle_key_btn, model];
+        ui.tab_controls[2] = vec![key, toggle_key_btn, model, test_api_btn];
 
         // ================= Tab 3: 关于软件 =================
         let open_config_btn = owner_button(
@@ -736,7 +895,8 @@ fn draw_owner_button(ui: &Ui, dis: &DRAWITEMSTRUCT) {
     let is_pressed = (dis.itemState.0 & ODS_SELECTED.0) != 0;
     let is_disabled = (dis.itemState.0 & ODS_DISABLED.0) != 0;
     let is_accent = dis.CtlID == 1;
-    let is_recording_btn = dis.CtlID == 103 && ui.recording;
+    let is_recording_btn = (dis.CtlID == 103 && ui.recording == Some(HotkeyTarget::Capture))
+        || (dis.CtlID == 107 && ui.recording == Some(HotkeyTarget::Translate));
 
     let cur = cursor_pos();
     let mut pt = windows::Win32::Foundation::POINT { x: cur.x, y: cur.y };
@@ -1028,8 +1188,8 @@ fn paint_dialog(ui: &Ui, hdc: HDC, w: i32, h: i32) {
     // Active tab header text
     let (tab_title, tab_sub) = match ui.active_tab {
         0 => ("通用偏好设置", "配置截图保存路径、终端输出格式与开机行为"),
-        1 => ("快捷按键设置", "管理全局唤醒快捷键及内置高效截图操作速查"),
-        2 => ("DeepSeek AI 智能识别", "配置大语言模型 API，赋能截图 OCR 文字提取与划词翻译"),
+        1 => ("快捷按键设置", "分别管理截图与剪贴板翻译快捷键"),
+        2 => ("DeepSeek AI 智能识别", "配置截图 OCR、截图翻译与剪贴板翻译所用的模型 API"),
         _ => ("关于 TermShot", "轻量、极速、无广告的现代化原生截图工具"),
     };
 
@@ -1070,7 +1230,7 @@ fn paint_dialog(ui: &Ui, hdc: HDC, w: i32, h: i32) {
 
             draw_gdi_text(
                 hdc,
-                "📁   存储路径与终端交互",
+                "存储路径与终端交互",
                 RECT {
                     left: content_x + p(16),
                     top: c1_y + p(14),
@@ -1117,7 +1277,7 @@ fn paint_dialog(ui: &Ui, hdc: HDC, w: i32, h: i32) {
 
             draw_gdi_text(
                 hdc,
-                "⚡   截图后行为与启动项",
+                "截图后行为与启动项",
                 RECT {
                     left: content_x + p(16),
                     top: c2_y + p(14),
@@ -1144,14 +1304,14 @@ fn paint_dialog(ui: &Ui, hdc: HDC, w: i32, h: i32) {
             );
         }
         1 => {
-            // Card 1: 全局唤醒快捷键
+            // Card 1: 两组全局快捷键
             let c1_y = p(66);
-            let c1_h = p(126);
+            let c1_h = p(154);
             draw_card_box(hdc, content_x, c1_y, card_w, c1_h, round_card, ui.panel_brush, ui.border_pen);
 
             draw_gdi_text(
                 hdc,
-                "🎯   全局唤醒截图",
+                "全局快捷键",
                 RECT {
                     left: content_x + p(16),
                     top: c1_y + p(14),
@@ -1165,7 +1325,7 @@ fn paint_dialog(ui: &Ui, hdc: HDC, w: i32, h: i32) {
 
             draw_gdi_text(
                 hdc,
-                "唤醒快捷键:",
+                "截图快捷键:",
                 RECT {
                     left: content_x + p(16),
                     top: c1_y + p(44),
@@ -1179,26 +1339,40 @@ fn paint_dialog(ui: &Ui, hdc: HDC, w: i32, h: i32) {
 
             draw_gdi_text(
                 hdc,
-                "推荐使用 Ctrl / Alt / Shift 组合键或 F1-F12 单键；录制时按 Esc 可取消。",
+                "翻译快捷键:",
                 RECT {
                     left: content_x + p(16),
-                    top: c1_y + p(88),
+                    top: c1_y + p(84),
+                    right: content_x + p(96),
+                    bottom: c1_y + p(110),
+                },
+                ui.font,
+                theme::TEXT,
+                DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
+            );
+
+            draw_gdi_text(
+                hdc,
+                "推荐组合键或 F1-F12 单键；两组快捷键不能相同，录制时按 Esc 可取消。",
+                RECT {
+                    left: content_x + p(16),
+                    top: c1_y + p(120),
                     right: content_x + card_w - p(16),
-                    bottom: c1_y + p(112),
+                    bottom: c1_y + p(144),
                 },
                 ui.font_sm,
                 theme::DIM,
                 DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
             );
 
-            // Card 2: 截图模式内置快捷键速查表
-            let c2_y = p(204);
-            let c2_h = p(266);
+            // Card 2: 快捷键速查表
+            let c2_y = p(232);
+            let c2_h = p(238);
             draw_card_box(hdc, content_x, c2_y, card_w, c2_h, round_card, ui.panel_brush, ui.border_pen);
 
             draw_gdi_text(
                 hdc,
-                "📖   截图模式内置快捷键速查",
+                "快捷键速查",
                 RECT {
                     left: content_x + p(16),
                     top: c2_y + p(12),
@@ -1210,15 +1384,14 @@ fn paint_dialog(ui: &Ui, hdc: HDC, w: i32, h: i32) {
                 DT_LEFT | DT_SINGLELINE | DT_NOPREFIX,
             );
 
+            let translate_shortcut = format_hotkey(ui.translate_mods, ui.translate_vk);
             let cheatsheet = [
+                (translate_shortcut.as_str(), "翻译剪贴板文字，并在置顶窗口显示完整译文"),
                 ("Enter / 双击选区", "完成截图并根据设定写入剪贴板或保存文件"),
-                ("Ctrl + S", "另存为 PNG 文件到自定义目录"),
-                ("Ctrl + C", "仅复制当前截取图像到剪贴板，不写路径"),
-                ("Ctrl + Z", "撤销上一步涂鸦、画笔、马赛克或标注"),
+                ("S / Ctrl+S", "另存为 PNG 文件到自定义目录"),
+                ("C / Ctrl+C", "仅复制当前截取图像到剪贴板，不写路径"),
+                ("Z / Ctrl+Z", "撤销上一步涂鸦、画笔、马赛克或标注"),
                 ("Esc", "取消并立即放弃退出当前截图"),
-                ("Tab", "切换当前选区编辑控制锚点 / 缩放手柄"),
-                ("方向键 ↑ ↓ ← →", "以 1 像素高精度微调当前选区位置"),
-                ("Shift + 方向键", "以 10 像素步长快速调整当前选区尺寸"),
             ];
 
             let badge_bg = Color::rgb(0x11, 0x16, 0x20);
@@ -1361,7 +1534,7 @@ fn paint_dialog(ui: &Ui, hdc: HDC, w: i32, h: i32) {
 
             draw_gdi_text(
                 hdc,
-                "✨   AI 智能视觉工作流",
+                "AI 智能视觉工作流",
                 RECT {
                     left: content_x + p(16),
                     top: c2_y + p(14),
@@ -1374,9 +1547,9 @@ fn paint_dialog(ui: &Ui, hdc: HDC, w: i32, h: i32) {
             );
 
             let ai_features = [
-                ("🔍  智能 OCR 文字提取", "截图完成后点击工具栏提取文字，自动保留多行排版、代码缩进及表格数据。"),
-                ("🌐  多语言双语即时翻译", "划选屏幕外文内容，一键中英互译并直接呈现译文悬浮层，大幅提升阅读效率。"),
-                ("🔒  本地按需与隐私安全", "仅在主动触发“提取文字”或“翻译”时调用官方 API，绝不在后台自动上传屏幕。"),
+                ("OCR 文字提取", "截图完成后点击工具栏提取文字，自动保留多行排版、代码缩进及表格数据。"),
+                ("多语言即时翻译", "支持截图翻译与剪贴板文字翻译，中英自动互译并在独立窗口中呈现完整译文。"),
+                ("本地按需与隐私安全", "仅在主动触发“提取文字”或“翻译”时调用官方 API，不会在后台自动上传屏幕或剪贴板。"),
             ];
 
             for (i, &(title, desc)) in ai_features.iter().enumerate() {
@@ -1444,10 +1617,10 @@ fn paint_dialog(ui: &Ui, hdc: HDC, w: i32, h: i32) {
             );
 
             let about_items = [
-                "⚡ 极速冷启动与超低内存：纯 Rust 打造，常驻内存 < 15MB，无任何 Electron 沉重负担",
+                "极速冷启动与低内存：纯 Rust 原生实现，无 WebView 或 Electron 运行时",
                 "🎨 原生 GDI 双缓冲渲染：纯 Win32 原生平滑自绘，极致响应，杜绝卡顿与界面撕裂",
                 "🛡 永久开源免费：基于宽松友好的 MIT License 开源协议，支持个人与团队自由商用",
-                "📋 开发者终端友好：支持复制文件路径附带双引号，方便在 PowerShell / bash 中一键 cd 或引用",
+                "开发者终端友好：复制文件路径可附带双引号，方便在 PowerShell / bash 中引用",
             ];
 
             for (i, &item) in about_items.iter().enumerate() {
@@ -1535,8 +1708,16 @@ fn paint_dialog(ui: &Ui, hdc: HDC, w: i32, h: i32) {
     }
 
     // Status / Tip text on bottom left
-    let status_color = if ui.recording {
+    let status_color = if ui.recording.is_some() {
         theme::ACCENT_HI
+    } else if ui.status_text.contains("失败")
+        || ui.status_text.contains("不能")
+        || ui.status_text.contains("不可用")
+        || ui.status_text.contains("请先")
+    {
+        theme::DANGER
+    } else if ui.status_text.contains("成功") || ui.status_text.starts_with("已") {
+        theme::SUCCESS
     } else {
         theme::DIM
     };
@@ -1568,6 +1749,36 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
     let ui = &mut *ptr;
 
     match msg {
+        m if m == WM_TEST_DONE => {
+            let raw = lparam.0 as *mut Result<(), String>;
+            if !raw.is_null() {
+                let result = Box::from_raw(raw);
+                ui.testing_api = false;
+                let _ = EnableWindow(ui.test_api_btn, true);
+                let label = wide("验证连接");
+                let _ = SetWindowTextW(ui.test_api_btn, windows::core::PCWSTR(label.as_ptr()));
+                match *result {
+                    Ok(()) => set_status(ui, "DeepSeek 连接验证成功，API Key 可用"),
+                    Err(error) => set_status(ui, &format!("连接验证失败: {error}")),
+                }
+            }
+            LRESULT(0)
+        }
+        WM_CLOSE => {
+            if !ui.saved && settings_from_ui(ui) != ui.original {
+                let answer = MessageBoxW(
+                    hwnd,
+                    windows::core::w!("当前设置尚未保存，确定放弃这些更改吗？"),
+                    windows::core::w!("TermShot — 放弃更改"),
+                    MB_YESNO | MB_ICONWARNING,
+                );
+                if answer != IDYES {
+                    return LRESULT(0);
+                }
+            }
+            let _ = DestroyWindow(hwnd);
+            LRESULT(0)
+        }
         WM_ERASEBKGND => LRESULT(1),
         WM_PAINT => {
             let mut ps = PAINTSTRUCT::default();
@@ -1656,7 +1867,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
         WM_CTLCOLORSTATIC => {
             let hdc = HDC(wparam.0 as *mut _);
             let ctrl = HWND(lparam.0 as *mut _);
-            if ctrl == ui.hotkey {
+            if ctrl == ui.hotkey || ctrl == ui.translate_hotkey {
                 SetTextColor(hdc, COLORREF(theme::TEXT.colorref()));
                 SetBkColor(hdc, COLORREF(theme::INPUT_BG.colorref()));
                 return LRESULT(ui.input_brush.0 as isize);
@@ -1697,32 +1908,16 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                         set_status(ui, "已在资源管理器中打开保存目录");
                     }
                     103 => {
-                        ui.recording = !ui.recording;
-                        if ui.recording {
-                            let btn_w = wide("停止录制");
-                            let _ = SetWindowTextW(ui.record_btn, windows::core::PCWSTR(btn_w.as_ptr()));
-                            set_status(ui, "请直接按下新的快捷键组合（如 Ctrl+Alt+A），按 Esc 取消");
-                            let place = wide("等待按下快捷键...");
-                            let _ = SetWindowTextW(ui.hotkey, windows::core::PCWSTR(place.as_ptr()));
-                        } else {
-                            let btn_w = wide("录制");
-                            let _ = SetWindowTextW(ui.record_btn, windows::core::PCWSTR(btn_w.as_ptr()));
-                            let w = wide(&format_hotkey(ui.mods, ui.vk));
-                            let _ = SetWindowTextW(ui.hotkey, windows::core::PCWSTR(w.as_ptr()));
-                            set_status(ui, "已取消录制快捷键");
-                        }
-                        let _ = windows::Win32::Graphics::Gdi::InvalidateRect(ui.record_btn, None, true);
+                        toggle_recording(ui, HotkeyTarget::Capture);
                     }
                     104 => {
-                        ui.mods = crate::native::MOD_CONTROL_BIT | crate::native::MOD_SHIFT_BIT;
-                        ui.vk = 0x53; // 'S'
-                        ui.recording = false;
-                        let w = wide(&format_hotkey(ui.mods, ui.vk));
-                        let _ = SetWindowTextW(ui.hotkey, windows::core::PCWSTR(w.as_ptr()));
-                        let btn_w = wide("录制");
-                        let _ = SetWindowTextW(ui.record_btn, windows::core::PCWSTR(btn_w.as_ptr()));
-                        set_status(ui, "已恢复默认快捷键: Ctrl+Shift+S (点击保存后生效)");
-                        let _ = windows::Win32::Graphics::Gdi::InvalidateRect(ui.record_btn, None, true);
+                        reset_hotkey(ui, HotkeyTarget::Capture);
+                    }
+                    107 => {
+                        toggle_recording(ui, HotkeyTarget::Translate);
+                    }
+                    108 => {
+                        reset_hotkey(ui, HotkeyTarget::Translate);
                     }
                     105 => {
                         ui.show_key = !ui.show_key;
@@ -1739,13 +1934,22 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                         let _ = std::process::Command::new("explorer").arg(&p).spawn();
                         set_status(ui, "已在文件资源管理器中打开配置目录");
                     }
+                    109 => start_api_test(ui),
                     1 => {
-                        save_from_ui(ui);
-                        ui.saved = true;
-                        let _ = DestroyWindow(hwnd);
+                        if hotkeys_conflict(ui) {
+                            set_status(ui, "截图与翻译快捷键不能相同，请修改后再保存");
+                        } else {
+                            match save_from_ui(ui) {
+                                Ok(()) => {
+                                    ui.saved = true;
+                                    let _ = DestroyWindow(hwnd);
+                                }
+                                Err(error) => set_status(ui, &error),
+                            }
+                        }
                     }
                     2 => {
-                        let _ = DestroyWindow(hwnd);
+                        let _ = SendMessageW(hwnd, WM_CLOSE, WPARAM(0), LPARAM(0));
                     }
                     _ => {}
                 }
@@ -1815,26 +2019,77 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
     }
 }
 
-fn save_from_ui(ui: &mut Ui) {
-    ui.settings.save_directory = get_text(ui.dir);
+fn save_from_ui(ui: &mut Ui) -> Result<(), String> {
+    let settings = settings_from_ui(ui);
+    let directory = settings.resolved_save_directory();
+    std::fs::create_dir_all(&directory)
+        .map_err(|error| format!("保存目录不可用: {error}"))?;
+    if !directory.is_dir() {
+        return Err("保存目录不可用：指定路径不是文件夹".into());
+    }
+    ui.settings = settings;
+    ui.settings.save();
+    Ok(())
+}
+
+fn settings_from_ui(ui: &Ui) -> Settings {
+    let mut settings = ui.settings.clone();
+    settings.save_directory = get_text(ui.dir);
     let def = crate::util::pictures_dir().join("Screenshots");
-    if ui.settings.save_directory.eq_ignore_ascii_case(&def.display().to_string()) {
-        ui.settings.save_directory.clear();
+    if settings.save_directory.eq_ignore_ascii_case(&def.display().to_string()) {
+        settings.save_directory.clear();
     }
     let idx = unsafe { SendMessageW(ui.action, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0 as i32 };
-    ui.settings.post_capture_action = PostCaptureAction::from_index(idx);
-    ui.settings.quote_path = checked(ui.quote);
-    ui.settings.start_with_windows = checked(ui.startup);
-    ui.settings.deep_seek_api_key = get_text(ui.key).trim().to_string();
+    settings.post_capture_action = PostCaptureAction::from_index(idx);
+    settings.quote_path = checked(ui.quote);
+    settings.start_with_windows = checked(ui.startup);
+    settings.deep_seek_api_key = get_text(ui.key).trim().to_string();
     let m = get_text(ui.model).trim().to_string();
-    ui.settings.deep_seek_model = if m.is_empty() {
+    settings.deep_seek_model = if m.is_empty() {
         crate::settings::DEFAULT_MODEL.into()
     } else {
         m
     };
-    ui.settings.hotkey_modifiers = ui.mods;
-    ui.settings.hotkey_key = ui.vk;
-    ui.settings.save();
+    settings.hotkey_modifiers = ui.mods;
+    settings.hotkey_key = ui.vk;
+    settings.translate_hotkey_modifiers = ui.translate_mods;
+    settings.translate_hotkey_key = ui.translate_vk;
+    settings
+}
+
+fn start_api_test(ui: &mut Ui) {
+    if ui.testing_api {
+        return;
+    }
+    let settings = settings_from_ui(ui);
+    if !settings.has_vision() {
+        set_status(ui, "请先填写 DeepSeek API Key");
+        return;
+    }
+    ui.testing_api = true;
+    unsafe {
+        let _ = EnableWindow(ui.test_api_btn, false);
+        let label = wide("验证中…");
+        let _ = SetWindowTextW(ui.test_api_btn, windows::core::PCWSTR(label.as_ptr()));
+    }
+    set_status(ui, "正在验证 DeepSeek 连接，请稍候…");
+    let raw_hwnd = ui.hwnd.0 as isize;
+    std::thread::spawn(move || {
+        let result = crate::vision::test_connection(&settings);
+        let payload = Box::new(result);
+        let raw = Box::into_raw(payload);
+        let posted = unsafe {
+            PostMessageW(
+                HWND(raw_hwnd as *mut core::ffi::c_void),
+                WM_TEST_DONE,
+                WPARAM(0),
+                LPARAM(raw as isize),
+            )
+        };
+        if posted.is_err() {
+            unsafe { drop(Box::from_raw(raw)); }
+        }
+    });
 }
 
 fn browse_folder(owner: HWND, initial: &str) -> Option<String> {

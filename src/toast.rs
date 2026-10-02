@@ -3,11 +3,12 @@ use crate::native::{cursor_pos, dpi_scale_at, hinstance, place_topmost, sc, work
 use crate::theme;
 use crate::util::wide;
 use std::sync::atomic::{AtomicPtr, Ordering};
+use std::sync::Mutex;
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW, CreatePen,
     CreateRoundRectRgn, CreateSolidBrush, DeleteDC, DeleteObject, DrawTextW, EndPaint, GetDC,
-    InvalidateRect, ReleaseDC, RoundRect, SelectObject, SetBkMode, SetTextColor, SetWindowRgn,
+    ReleaseDC, RoundRect, SelectObject, SetBkMode, SetTextColor, SetWindowRgn,
     CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DT_CALCRECT, DT_END_ELLIPSIS, DT_LEFT,
     DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER, DT_WORDBREAK, FW_BOLD, FW_NORMAL, HFONT,
     OUT_DEFAULT_PRECIS, PAINTSTRUCT, PS_SOLID, SRCCOPY, TRANSPARENT,
@@ -25,6 +26,7 @@ pub const WM_SHOW_TOAST: u32 = WM_APP + 40;
 const WM_MOUSELEAVE: u32 = 0x02A3;
 
 struct Toast {
+    kind: ToastKind,
     title: String,
     text: String,
     remaining: u32,
@@ -34,44 +36,59 @@ struct Toast {
     hovering: bool,
 }
 
+#[derive(Clone, Copy)]
+enum ToastKind {
+    Info,
+    Success,
+    Error,
+}
+
 static HOST: AtomicPtr<core::ffi::c_void> = AtomicPtr::new(std::ptr::null_mut());
-static CURRENT: AtomicPtr<core::ffi::c_void> = AtomicPtr::new(std::ptr::null_mut());
+static TOASTS: Mutex<Vec<isize>> = Mutex::new(Vec::new());
 
 pub fn set_host(hwnd: HWND) {
     HOST.store(hwnd.0, Ordering::SeqCst);
 }
 
 pub fn show(title: &str, text: &str) {
+    show_kind(ToastKind::Info, title, text);
+}
+
+fn show_kind(kind: ToastKind, title: &str, text: &str) {
     let host = HWND(HOST.load(Ordering::SeqCst));
     if host.0.is_null() {
-        show_now(title, text);
+        show_now(kind, title, text);
         return;
     }
-    let payload = Box::new((title.to_string(), text.to_string()));
+    let payload = Box::new((kind, title.to_string(), text.to_string()));
     let lp = LPARAM(Box::into_raw(payload) as isize);
     unsafe {
         if PostMessageW(host, WM_SHOW_TOAST, WPARAM(0), lp).is_err() {
-            drop(Box::from_raw(lp.0 as *mut (String, String)));
-            show_now(title, text);
+            drop(Box::from_raw(lp.0 as *mut (ToastKind, String, String)));
+            show_now(kind, title, text);
         }
     }
 }
 
+pub fn show_error(title: &str, text: &str) {
+    show_kind(ToastKind::Error, title, text);
+}
+
+pub fn show_success(title: &str, text: &str) {
+    show_kind(ToastKind::Success, title, text);
+}
+
+pub fn show_info(title: &str, text: &str) {
+    show_kind(ToastKind::Info, title, text);
+}
+
 pub fn dispatch(lparam: LPARAM) {
-    let p = lparam.0 as *mut (String, String);
+    let p = lparam.0 as *mut (ToastKind, String, String);
     if p.is_null() {
         return;
     }
     let b = unsafe { Box::from_raw(p) };
-    show_now(&b.0, &b.1);
-}
-
-fn current() -> HWND {
-    HWND(CURRENT.load(Ordering::SeqCst))
-}
-
-fn set_current(hwnd: HWND) {
-    CURRENT.store(hwnd.0, Ordering::SeqCst);
+    show_now(b.0, &b.1, &b.2);
 }
 
 fn measure_text_height(text: &str, max_w: i32, scale: f32) -> i32 {
@@ -115,7 +132,7 @@ pub(crate) fn compute_toast_dims(text: &str, scale: f32) -> (i32, i32, u32) {
     (w, h, duration)
 }
 
-fn show_now(title: &str, text: &str) {
+fn show_now(kind: ToastKind, title: &str, text: &str) {
     unsafe {
         let cur_pt = cursor_pos();
         let work = work_area_from_point(cur_pt);
@@ -124,37 +141,18 @@ fn show_now(title: &str, text: &str) {
         let (w, h, duration) = compute_toast_dims(text, scale);
 
         let x = work.right() - w - sc(16, scale);
-        let y = work.y + sc(16, scale);
-
-        let cur = current();
-        if !cur.0.is_null() && !cur.is_invalid() {
-            let ptr = GetWindowLongPtrW(cur, GWLP_USERDATA) as *mut Toast;
-            if !ptr.is_null() {
-                let t = &mut *ptr;
-                t.title = title.to_string();
-                t.text = text.chars().take(600).collect();
-                t.remaining = duration;
-                t.w = w;
-                t.h = h;
-                t.scale = scale;
-                t.hovering = false;
-
-                let card_round = sc(8, scale);
-                let rgn = CreateRoundRectRgn(0, 0, w + 1, h + 1, card_round, card_round);
-                if SetWindowRgn(cur, rgn, true) == 0 {
-                    let _ = DeleteObject(rgn);
-                }
-
-                place_topmost(cur, Rect::new(x, y, w, h), false);
-                let _ = InvalidateRect(cur, None, false);
-                return;
-            }
+        let old = TOASTS.lock().ok().and_then(|list| (list.len() >= 3).then(|| list[0]));
+        if let Some(old) = old {
+            let _ = DestroyWindow(HWND(old as *mut core::ffi::c_void));
         }
+        let stack_height = toast_stack_height(scale);
+        let y = work.y + sc(16, scale) + stack_height;
 
         let state = Box::new(Toast {
+            kind,
             title: title.to_string(),
             text: text.chars().take(600).collect(),
-            remaining: duration,
+            remaining: if matches!(kind, ToastKind::Error) { duration.max(4500) } else { duration },
             w,
             h,
             scale,
@@ -194,7 +192,9 @@ fn show_now(title: &str, text: &str) {
             let _ = DeleteObject(rgn);
         }
 
-        set_current(hwnd);
+        if let Ok(mut list) = TOASTS.lock() {
+            list.push(hwnd.0 as isize);
+        }
         place_topmost(hwnd, Rect::new(x, y, w, h), false);
         let _ = SetTimer(hwnd, 1, 50, None);
     }
@@ -202,12 +202,24 @@ fn show_now(title: &str, text: &str) {
 
 pub fn close() {
     unsafe {
-        let cur = current();
-        if !cur.0.is_null() {
-            let _ = DestroyWindow(cur);
-            set_current(HWND::default());
+        let list = TOASTS
+            .lock()
+            .map(|mut list| list.drain(..).collect::<Vec<_>>())
+            .unwrap_or_default();
+        for raw in list {
+            let _ = DestroyWindow(HWND(raw as *mut core::ffi::c_void));
         }
     }
+}
+
+unsafe fn toast_stack_height(scale: f32) -> i32 {
+    let list = TOASTS.lock().map(|list| list.clone()).unwrap_or_default();
+    list.into_iter()
+        .filter_map(|raw| {
+            let ptr = GetWindowLongPtrW(HWND(raw as *mut core::ffi::c_void), GWLP_USERDATA) as *mut Toast;
+            (!ptr.is_null()).then(|| (*ptr).h + sc(8, scale))
+        })
+        .sum()
 }
 
 fn make_font(px: i32, bold: bool) -> HFONT {
@@ -253,7 +265,12 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                 let card_round = sc(8, scale);
 
                 // 1. Background Card
-                let bg_brush = CreateSolidBrush(COLORREF(theme::PANEL.colorref()));
+                let (accent, background) = match t.kind {
+                    ToastKind::Info => (theme::INFO, theme::PANEL),
+                    ToastKind::Success => (theme::SUCCESS, theme::SUCCESS_BG),
+                    ToastKind::Error => (theme::DANGER, theme::ERROR_BG),
+                };
+                let bg_brush = CreateSolidBrush(COLORREF(background.colorref()));
                 let border_pen = CreatePen(PS_SOLID, 1, COLORREF(theme::BORDER.colorref()));
                 let old_b = SelectObject(mem_dc, bg_brush);
                 let old_p = SelectObject(mem_dc, border_pen);
@@ -268,7 +285,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                 let bar_y = sc(12, scale);
                 let bar_w = sc(3, scale).max(2);
                 let bar_h = (t.h - sc(24, scale)).max(sc(16, scale));
-                let accent_brush = CreateSolidBrush(COLORREF(theme::ACCENT.colorref()));
+                let accent_brush = CreateSolidBrush(COLORREF(accent.colorref()));
                 let old_ab = SelectObject(mem_dc, accent_brush);
                 let _ = RoundRect(mem_dc, bar_x, bar_y, bar_x + bar_w, bar_y + bar_h, sc(2, scale), sc(2, scale));
                 SelectObject(mem_dc, old_ab);
@@ -276,7 +293,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
 
                 // 3. Title Text
                 SetBkMode(mem_dc, TRANSPARENT);
-                SetTextColor(mem_dc, COLORREF(theme::ACCENT_HI.colorref()));
+                SetTextColor(mem_dc, COLORREF(accent.colorref()));
                 let font_title = make_font(sc(13, scale), true);
                 let old_font = SelectObject(mem_dc, font_title);
 
@@ -393,12 +410,32 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                 drop(Box::from_raw(ptr));
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
             }
-            if current() == hwnd {
-                set_current(HWND::default());
+            if let Ok(mut list) = TOASTS.lock() {
+                list.retain(|raw| *raw != hwnd.0 as isize);
             }
+            reflow_toasts();
             LRESULT(0)
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
+}
+
+unsafe fn reflow_toasts() {
+    let cursor = cursor_pos();
+    let work = work_area_from_point(cursor);
+    let scale = dpi_scale_at(cursor).max(1.0);
+    let list = TOASTS.lock().map(|list| list.clone()).unwrap_or_default();
+    let mut y = work.y + sc(16, scale);
+    for raw in list {
+        let hwnd = HWND(raw as *mut core::ffi::c_void);
+        let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut Toast;
+        if ptr.is_null() {
+            continue;
+        }
+        let toast = &*ptr;
+        let x = work.right() - toast.w - sc(16, toast.scale);
+        place_topmost(hwnd, Rect::new(x, y, toast.w, toast.h), false);
+        y += toast.h + sc(8, scale);
     }
 }
 
@@ -425,4 +462,3 @@ mod tests {
         assert_eq!(dur_long, 4500);
     }
 }
-

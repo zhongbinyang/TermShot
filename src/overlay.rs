@@ -12,10 +12,11 @@ use crate::theme;
 use crate::toolbar::{ActionToolbar, ToolbarResult};
 use crate::util::{clamp_i32, wide};
 use crate::windows_enum::{hit_test, WindowInfo};
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject,
-    EndPaint, InvalidateRect, SelectObject, SetWindowOrgEx, PAINTSTRUCT, SRCCOPY,
+    BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateSolidBrush, DeleteDC,
+    DeleteObject, EndPaint, InvalidateRect, SelectObject, SetBkColor, SetTextColor, SetWindowOrgEx,
+    HBRUSH, PAINTSTRUCT, SRCCOPY,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_1, VK_2, VK_3, VK_4, VK_A, VK_B, VK_C, VK_E, VK_ESCAPE, VK_H, VK_L, VK_M, VK_O, VK_P, VK_R,
@@ -25,7 +26,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect, GetMessageW,
     PostQuitMessage, RegisterClassExW, SetWindowLongPtrW, ShowWindow, TranslateMessage, WM_SIZE,
     CS_DBLCLKS, GWLP_USERDATA, MSG, SW_SHOW, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_KEYDOWN,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_RBUTTONDOWN, WM_SYSKEYDOWN, WNDCLASSEXW,
+    WM_CTLCOLOREDIT, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_RBUTTONDOWN,
+    WM_SYSKEYDOWN, WNDCLASSEXW,
     WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
 };
 
@@ -65,6 +67,7 @@ struct OverlayState {
     shot_gdi: Option<GdiBitmap>,
     veiled_gdi: Option<GdiBitmap>,
     prev_tip_rect: Option<Rect>,
+    edit_brush: HBRUSH,
 }
 
 struct Outcome {
@@ -113,6 +116,7 @@ pub fn run(
         shot_gdi,
         veiled_gdi,
         prev_tip_rect: None,
+        edit_brush: unsafe { CreateSolidBrush(COLORREF(theme::INPUT_BG.colorref())) },
     });
     if state.veiled_gdi.is_some() {
         state.veiled = Bitmap::new(1, 1);
@@ -197,6 +201,12 @@ pub fn run(
     if is_window_ok(state.prev) {
         set_foreground(state.prev);
     }
+    unsafe {
+        if !state.edit_brush.is_invalid() {
+            let _ = DeleteObject(state.edit_brush);
+            state.edit_brush = HBRUSH::default();
+        }
+    }
     OverlayResult {
         selected: outcome.selected,
         scroll: outcome.scroll,
@@ -232,6 +242,12 @@ impl OverlayState {
                 LRESULT(0)
             }
             WM_ERASEBKGND => LRESULT(1),
+            WM_CTLCOLOREDIT => unsafe {
+                let hdc = windows::Win32::Graphics::Gdi::HDC(wparam.0 as *mut _);
+                let _ = SetTextColor(hdc, COLORREF(theme::TEXT.colorref()));
+                let _ = SetBkColor(hdc, COLORREF(theme::INPUT_BG.colorref()));
+                LRESULT(self.edit_brush.0 as isize)
+            },
             WM_MOUSEMOVE => {
                 let p = lparam_point(lparam);
                 self.on_move(hwnd, p);
@@ -777,7 +793,6 @@ impl OverlayState {
                 windows::Win32::UI::WindowsAndMessaging::WINDOW_STYLE(
                     windows::Win32::UI::WindowsAndMessaging::WS_CHILD.0
                         | windows::Win32::UI::WindowsAndMessaging::WS_VISIBLE.0
-                        | windows::Win32::UI::WindowsAndMessaging::WS_BORDER.0
                         | 0x0080, // ES_AUTOHSCROLL
                 ),
                 client.x.clamp(8, 4000),
@@ -878,6 +893,22 @@ impl OverlayState {
                     sc(3, scale),
                 );
                 stroke_rect_hdc(mem_dc, dest, theme::ACCENT, 1);
+                let size_text = format!("{} × {} px", hr.w.max(1), hr.h.max(1));
+                let size_px = sc(12, scale);
+                let (size_w, size_h) = crate::draw::measure_text(&size_text, size_px);
+                let badge_w = size_w + sc(16, scale);
+                let badge_h = size_h + sc(8, scale);
+                let badge_y = if dest.y - badge_h - sc(6, scale) >= 0 {
+                    dest.y - badge_h - sc(6, scale)
+                } else {
+                    dest.y + sc(6, scale)
+                };
+                paint_chip(
+                    mem_dc,
+                    Rect::new(dest.x, badge_y, badge_w, badge_h),
+                    &size_text,
+                    scale,
+                );
                 if self.awaiting {
                     self.toolbar.sync(&self.ann);
                     let confine = {

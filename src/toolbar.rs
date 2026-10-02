@@ -463,8 +463,8 @@ impl ActionToolbar {
             ToolbarResult::Save => "保存图片  ·  S",
             ToolbarResult::CopyImage => "复制图片  ·  C",
             ToolbarResult::CopyPath => "复制图片地址  ·  P",
-            ToolbarResult::CopyText => "复制文字  ·  O",
-            ToolbarResult::Translate => "翻译  ·  L",
+            ToolbarResult::CopyText => "识别文字并显示结果  ·  O",
+            ToolbarResult::Translate => "翻译并显示结果  ·  L",
             ToolbarResult::Close => "取消  ·  Esc",
             _ => "",
         }

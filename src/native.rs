@@ -31,7 +31,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 pub const WM_HOTKEY: u32 = 0x0312;
 pub const WM_SETCURSOR: u32 = 0x0020;
 pub const HTCLIENT: isize = 1;
-pub const HOTKEY_ID: i32 = 0x7E05;
+pub const HOTKEY_CAPTURE_ID: i32 = 0x7E05;
+pub const HOTKEY_TRANSLATE_ID: i32 = 0x7E06;
 
 pub fn enable_dpi() {
     unsafe {
@@ -269,16 +270,16 @@ pub fn has_capture(hwnd: HWND) -> bool {
     unsafe { GetCapture() == hwnd }
 }
 
-pub fn register_hotkey(hwnd: HWND, modifiers: u32, vk: u32) -> bool {
+pub fn register_hotkey(hwnd: HWND, id: i32, modifiers: u32, vk: u32) -> bool {
     unsafe {
         let mods = HOT_KEY_MODIFIERS(modifiers | MOD_NOREPEAT.0);
-        RegisterHotKey(hwnd, HOTKEY_ID, mods, vk).is_ok()
+        RegisterHotKey(hwnd, id, mods, vk).is_ok()
     }
 }
 
-pub fn unregister_hotkey(hwnd: HWND) {
+pub fn unregister_hotkey(hwnd: HWND, id: i32) {
     unsafe {
-        let _ = UnregisterHotKey(hwnd, HOTKEY_ID);
+        let _ = UnregisterHotKey(hwnd, id);
     }
 }
 
@@ -475,4 +476,3 @@ pub const MOD_CONTROL_BIT: u32 = MOD_CONTROL.0;
 pub const MOD_SHIFT_BIT: u32 = MOD_SHIFT.0;
 pub const MOD_ALT_BIT: u32 = MOD_ALT.0;
 pub const MOD_WIN_BIT: u32 = MOD_WIN.0;
-

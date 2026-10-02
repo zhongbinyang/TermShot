@@ -27,8 +27,8 @@ impl PostCaptureAction {
             (Self::CopyImage, "复制图片"),
             (Self::CopyPath, "复制保存图片的地址"),
             (Self::Pin, "贴到桌面"),
-            (Self::CopyText, "复制文字（模型识别）"),
-            (Self::Translate, "翻译并复制译文"),
+            (Self::CopyText, "识别文字并显示结果"),
+            (Self::Translate, "翻译并显示结果"),
         ]
     }
 
@@ -52,12 +52,14 @@ impl PostCaptureAction {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
     pub save_directory: String,
     pub hotkey_modifiers: u32,
     pub hotkey_key: u32,
+    pub translate_hotkey_modifiers: u32,
+    pub translate_hotkey_key: u32,
     pub post_capture_action: PostCaptureAction,
     pub quote_path: bool,
     pub start_with_windows: bool,
@@ -71,6 +73,8 @@ impl Default for Settings {
             save_directory: String::new(),
             hotkey_modifiers: MOD_CONTROL_BIT | MOD_SHIFT_BIT,
             hotkey_key: 0x53, // S
+            translate_hotkey_modifiers: MOD_CONTROL_BIT | MOD_SHIFT_BIT,
+            translate_hotkey_key: 0x54, // T
             post_capture_action: PostCaptureAction::Ask,
             quote_path: true,
             start_with_windows: true,
@@ -136,6 +140,10 @@ impl Settings {
     pub fn format_hotkey(&self) -> String {
         format_hotkey(self.hotkey_modifiers, self.hotkey_key)
     }
+
+    pub fn format_translate_hotkey(&self) -> String {
+        format_hotkey(self.translate_hotkey_modifiers, self.translate_hotkey_key)
+    }
 }
 
 pub fn format_hotkey(modifiers: u32, key: u32) -> String {
@@ -196,3 +204,21 @@ const LETTERS: [&str; 26] = [
     "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S",
     "T", "U", "V", "W", "X", "Y", "Z",
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn old_settings_receive_default_translation_hotkey() {
+        let settings: Settings = serde_json::from_str(
+            r#"{"hotkeyModifiers":2,"hotkeyKey":65,"startWithWindows":false}"#,
+        )
+        .unwrap();
+
+        assert_eq!(settings.hotkey_key, 65);
+        assert_eq!(settings.translate_hotkey_modifiers, MOD_CONTROL_BIT | MOD_SHIFT_BIT);
+        assert_eq!(settings.translate_hotkey_key, 0x54);
+        assert_eq!(settings.format_translate_hotkey(), "Ctrl+Shift+T");
+    }
+}

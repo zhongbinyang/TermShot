@@ -9,10 +9,11 @@ use crate::settings::PostCaptureAction;
 use crate::theme;
 use crate::toolbar::{ActionToolbar, ToolbarResult};
 use crate::util::wide;
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject,
-    EndPaint, InvalidateRect, SelectObject, SetWindowOrgEx, PAINTSTRUCT, SRCCOPY,
+    BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateSolidBrush, DeleteDC,
+    DeleteObject, EndPaint, InvalidateRect, SelectObject, SetBkColor, SetTextColor, SetWindowOrgEx,
+    HBRUSH, PAINTSTRUCT, SRCCOPY,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_1, VK_2, VK_3, VK_4, VK_A, VK_B, VK_C, VK_E, VK_ESCAPE, VK_H, VK_L, VK_M, VK_O, VK_P, VK_S,
@@ -21,7 +22,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect, GetMessageW,
     GetWindowLongPtrW, RegisterClassExW, SetWindowLongPtrW, CS_DBLCLKS, CS_DROPSHADOW, GWLP_USERDATA,
-    MSG, WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT,
+    MSG, WM_CTLCOLOREDIT, WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT,
     WM_RBUTTONDOWN, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
 };
 
@@ -40,6 +41,7 @@ pub fn run(bmp: Bitmap, screen_rect: Rect) -> Option<(PostCaptureAction, Bitmap,
         capturing: false,
         lit: None,
         prev_tip_rect: None,
+        edit_brush: unsafe { CreateSolidBrush(COLORREF(theme::INPUT_BG.colorref())) },
     });
     state.ann.attach(&state.bmp);
     state.ann.select(AnnotKind::Arrow);
@@ -91,6 +93,12 @@ pub fn run(bmp: Bitmap, screen_rect: Rect) -> Option<(PostCaptureAction, Bitmap,
         }
     }
 
+    unsafe {
+        if !state.edit_brush.is_invalid() {
+            let _ = DeleteObject(state.edit_brush);
+            state.edit_brush = HBRUSH::default();
+        }
+    }
     match state.done {
         Some(Some(action)) => {
             let mut bmp = state.bmp;
@@ -117,6 +125,7 @@ struct PinAsk {
     capturing: bool,
     lit: Option<Bitmap>,
     prev_tip_rect: Option<Rect>,
+    edit_brush: HBRUSH,
 }
 
 fn layout(bmp: &Bitmap, screen: Rect, work: Rect, scale: f32) -> (Rect, Rect) {
@@ -204,6 +213,12 @@ impl PinAsk {
                 LRESULT(0)
             }
             WM_ERASEBKGND => LRESULT(1),
+            WM_CTLCOLOREDIT => unsafe {
+                let hdc = windows::Win32::Graphics::Gdi::HDC(wparam.0 as *mut _);
+                let _ = SetTextColor(hdc, COLORREF(theme::TEXT.colorref()));
+                let _ = SetBkColor(hdc, COLORREF(theme::INPUT_BG.colorref()));
+                LRESULT(self.edit_brush.0 as isize)
+            },
             WM_DESTROY => LRESULT(0),
             _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
         }
@@ -419,7 +434,6 @@ impl PinAsk {
                 windows::Win32::UI::WindowsAndMessaging::WINDOW_STYLE(
                     windows::Win32::UI::WindowsAndMessaging::WS_CHILD.0
                         | windows::Win32::UI::WindowsAndMessaging::WS_VISIBLE.0
-                        | windows::Win32::UI::WindowsAndMessaging::WS_BORDER.0
                         | 0x80,
                 ),
                 client.x,

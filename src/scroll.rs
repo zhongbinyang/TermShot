@@ -238,7 +238,11 @@ unsafe extern "system" fn hud_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                 SetTextColor(mem_dc, COLORREF(theme::TEXT.colorref()));
                 let old_font = SelectObject(mem_dc, font_title);
 
-                let status_msg = format!("用滚轮向下滚动  ·  高度: {} px", hud.height);
+                let status_msg = if hud.height >= MAX_HEIGHT {
+                    format!("已达到高度上限  ·  {} px  ·  请完成", hud.height)
+                } else {
+                    format!("已捕获 {} px  ·  滚轮继续  ·  Enter 完成", hud.height)
+                };
                 let mut wt_status = wide(&status_msg);
                 let text_max_right = (hud.done_btn.x - hud.bar.x - sc(12, scale)).max(sc(100, scale));
                 let mut status_rc = RECT {

@@ -17,4 +17,16 @@ pub const DANGER: Color = Color::rgb(0xF0, 0x71, 0x78);
 pub const SIDEBAR_BG: Color = Color::rgb(0x16, 0x1B, 0x24);
 pub const HOVER_BG: Color = Color::rgb(0x23, 0x2D, 0x3B);
 pub const BOTTOM_BAR_BG: Color = Color::rgb(0x14, 0x19, 0x22);
+pub const SUCCESS: Color = Color::rgb(0x38, 0xD9, 0x96);
+pub const WARNING: Color = Color::rgb(0xF5, 0xB9, 0x42);
+pub const INFO: Color = Color::rgb(0x58, 0xA6, 0xFF);
+pub const ERROR_BG: Color = Color::rgb(0x32, 0x1D, 0x24);
+pub const SUCCESS_BG: Color = Color::rgb(0x10, 0x2D, 0x27);
+pub const INFO_BG: Color = Color::rgb(0x14, 0x25, 0x38);
 
+pub const RADIUS_SM: i32 = 5;
+pub const RADIUS_MD: i32 = 8;
+pub const RADIUS_LG: i32 = 12;
+pub const SPACE_SM: i32 = 8;
+pub const SPACE_MD: i32 = 12;
+pub const SPACE_LG: i32 = 16;
