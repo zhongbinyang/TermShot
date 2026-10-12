@@ -19,12 +19,14 @@ use windows::Win32::UI::HiDpi::{
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, GetCapture, ReleaseCapture, SetCapture, RegisterHotKey, UnregisterHotKey,
-    HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, MOD_WIN, VK_SHIFT,
+    HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, MOD_WIN, VK_CONTROL,
+    VK_MENU, VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetCursorPos, GetForegroundWindow, GetSystemMetrics, GetWindowRect, IsIconic, IsWindow,
     IsWindowVisible, LoadCursorW, SetCursor, SetForegroundWindow, SetWindowPos, HWND_TOPMOST,
-    IDC_ARROW, IDC_CROSS, IDC_HAND, IDC_IBEAM, IDC_SIZEALL, SM_CXSMICON, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
+    IDC_ARROW, IDC_CROSS, IDC_HAND, IDC_IBEAM, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENWSE,
+    IDC_SIZENS, IDC_SIZEWE, SM_CXSMICON, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
     SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SWP_NOACTIVATE, SWP_SHOWWINDOW,
 };
 
@@ -242,6 +244,18 @@ pub fn cursor_cross() {
 pub fn cursor_sizeall() {
     apply_cursor_id(IDC_SIZEALL);
 }
+pub fn cursor_sizens() {
+    apply_cursor_id(IDC_SIZENS);
+}
+pub fn cursor_sizewe() {
+    apply_cursor_id(IDC_SIZEWE);
+}
+pub fn cursor_sizenwse() {
+    apply_cursor_id(IDC_SIZENWSE);
+}
+pub fn cursor_sizenesw() {
+    apply_cursor_id(IDC_SIZENESW);
+}
 pub fn cursor_ibeam() {
     apply_cursor_id(IDC_IBEAM);
 }
@@ -252,6 +266,14 @@ pub fn key_down(vk: i32) -> bool {
 
 pub fn shift_down() -> bool {
     key_down(VK_SHIFT.0 as i32)
+}
+
+pub fn ctrl_down() -> bool {
+    key_down(VK_CONTROL.0 as i32)
+}
+
+pub fn alt_down() -> bool {
+    key_down(VK_MENU.0 as i32)
 }
 
 pub fn capture(hwnd: HWND) {

@@ -3,8 +3,9 @@ use crate::bitmap::{Bitmap, GdiBitmap};
 use crate::draw::fill_rect;
 use crate::geom::{Color, Point, Rect};
 use crate::native::{
-    apply_cursor_cross, capture, cursor_arrow, cursor_cross, cursor_hand, cursor_pos,
-    dpi_scale_at, dpi_scale_hwnd, hinstance, monitor_from_point, place_topmost,
+    alt_down, apply_cursor_cross, capture, ctrl_down, cursor_arrow, cursor_cross, cursor_hand,
+    cursor_pos, cursor_sizeall, cursor_sizenesw, cursor_sizens, cursor_sizenwse, cursor_sizewe,
+    dpi_scale_at, dpi_scale_hwnd, hinstance, key_down, monitor_from_point, place_topmost,
     release_capture, sc, set_foreground, shift_down, stroke_rect_hdc, virtual_screen, WM_SETCURSOR,
 };
 use crate::settings::PostCaptureAction;
@@ -19,8 +20,9 @@ use windows::Win32::Graphics::Gdi::{
     HBRUSH, PAINTSTRUCT, SRCCOPY,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    VK_1, VK_2, VK_3, VK_4, VK_A, VK_B, VK_C, VK_E, VK_ESCAPE, VK_H, VK_L, VK_M, VK_O, VK_P, VK_R,
-    VK_RETURN, VK_S, VK_T, VK_TAB, VK_X, VK_Z,
+    VK_1, VK_2, VK_3, VK_4, VK_A, VK_ADD, VK_B, VK_C, VK_DOWN, VK_E, VK_ESCAPE, VK_H, VK_L,
+    VK_LEFT, VK_M, VK_O, VK_OEM_MINUS, VK_OEM_PLUS, VK_P, VK_R, VK_RETURN, VK_RIGHT, VK_S,
+    VK_SPACE, VK_SUBTRACT, VK_T, VK_TAB, VK_UP, VK_X, VK_Z,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect, GetMessageW,
@@ -34,6 +36,20 @@ use windows::Win32::UI::WindowsAndMessaging::{
 const DRAG_THRESHOLD: i32 = 4;
 const MAG_SRC: i32 = 13;
 const MAG_ZOOM: i32 = 10;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResizeHandle {
+    None,
+    TopLeft,
+    Top,
+    TopRight,
+    Right,
+    BottomRight,
+    Bottom,
+    BottomLeft,
+    Left,
+    Inside,
+}
 
 pub struct OverlayResult {
     pub selected: Option<Rect>,
@@ -68,6 +84,9 @@ struct OverlayState {
     veiled_gdi: Option<GdiBitmap>,
     prev_tip_rect: Option<Rect>,
     edit_brush: HBRUSH,
+    resizing: Option<ResizeHandle>,
+    resize_origin: Point,
+    locked_origin: Rect,
 }
 
 struct Outcome {
@@ -117,6 +136,9 @@ pub fn run(
         veiled_gdi,
         prev_tip_rect: None,
         edit_brush: unsafe { CreateSolidBrush(COLORREF(theme::INPUT_BG.colorref())) },
+        resizing: None,
+        resize_origin: Point::default(),
+        locked_origin: Rect::default(),
     });
     if state.veiled_gdi.is_some() {
         state.veiled = Bitmap::new(1, 1);
@@ -234,6 +256,17 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
     (*ptr).handle(hwnd, msg, wparam, lparam)
 }
 
+fn apply_resize_cursor(h: ResizeHandle) {
+    match h {
+        ResizeHandle::TopLeft | ResizeHandle::BottomRight => cursor_sizenwse(),
+        ResizeHandle::TopRight | ResizeHandle::BottomLeft => cursor_sizenesw(),
+        ResizeHandle::Top | ResizeHandle::Bottom => cursor_sizens(),
+        ResizeHandle::Left | ResizeHandle::Right => cursor_sizewe(),
+        ResizeHandle::Inside => cursor_sizeall(),
+        ResizeHandle::None => {}
+    }
+}
+
 impl OverlayState {
     fn handle(&mut self, hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
         match msg {
@@ -275,8 +308,18 @@ impl OverlayState {
                 LRESULT(0)
             }
             WM_SETCURSOR => {
-                apply_cursor_cross();
-                LRESULT(1)
+                if self.awaiting {
+                    if let Some(h) = self.resizing {
+                        apply_resize_cursor(h);
+                    }
+                    LRESULT(1)
+                } else if self.dragging && key_down(VK_SPACE.0 as i32) {
+                    cursor_sizeall();
+                    LRESULT(1)
+                } else {
+                    apply_cursor_cross();
+                    LRESULT(1)
+                }
             }
             WM_SIZE | WM_DPICHANGED => {
                 self.restore_bounds(hwnd);
@@ -436,6 +479,248 @@ impl OverlayState {
         }
     }
 
+    fn hit_resize_handle(&self, hwnd: HWND, client: Point) -> ResizeHandle {
+        let Some(hr) = self.locked else {
+            return ResizeHandle::None;
+        };
+        let dest = self.dest_for_bmp(hwnd, hr);
+        let scale = self.ui_scale(hwnd, hr);
+        let handle_radius = sc(8, scale).max(6);
+        let r2 = handle_radius * handle_radius;
+
+        let dist_sq = |px: i32, py: i32| (client.x - px) * (client.x - px) + (client.y - py) * (client.y - py);
+
+        // 1. Check 4 corners first
+        if dist_sq(dest.x, dest.y) <= r2 {
+            return ResizeHandle::TopLeft;
+        }
+        if dist_sq(dest.right(), dest.y) <= r2 {
+            return ResizeHandle::TopRight;
+        }
+        if dist_sq(dest.right(), dest.bottom()) <= r2 {
+            return ResizeHandle::BottomRight;
+        }
+        if dist_sq(dest.x, dest.bottom()) <= r2 {
+            return ResizeHandle::BottomLeft;
+        }
+
+        // 2. Check 4 midpoints if enough space
+        if dest.w >= sc(40, scale) {
+            if dist_sq(dest.x + dest.w / 2, dest.y) <= r2 {
+                return ResizeHandle::Top;
+            }
+            if dist_sq(dest.x + dest.w / 2, dest.bottom()) <= r2 {
+                return ResizeHandle::Bottom;
+            }
+        }
+        if dest.h >= sc(40, scale) {
+            if dist_sq(dest.x, dest.y + dest.h / 2) <= r2 {
+                return ResizeHandle::Left;
+            }
+            if dist_sq(dest.right(), dest.y + dest.h / 2) <= r2 {
+                return ResizeHandle::Right;
+            }
+        }
+
+        // 3. Check 4 edges
+        let edge_tol = sc(5, scale).max(4);
+        let in_x_range = client.x >= dest.x - edge_tol && client.x <= dest.right() + edge_tol;
+        let in_y_range = client.y >= dest.y - edge_tol && client.y <= dest.bottom() + edge_tol;
+
+        if in_x_range && (client.y - dest.y).abs() <= edge_tol {
+            return ResizeHandle::Top;
+        }
+        if in_x_range && (client.y - dest.bottom()).abs() <= edge_tol {
+            return ResizeHandle::Bottom;
+        }
+        if in_y_range && (client.x - dest.x).abs() <= edge_tol {
+            return ResizeHandle::Left;
+        }
+        if in_y_range && (client.x - dest.right()).abs() <= edge_tol {
+            return ResizeHandle::Right;
+        }
+
+        // 4. Inside selection (when no annotation tool is active, can drag whole rect)
+        if dest.contains(client) && !self.ann.tool_active() {
+            return ResizeHandle::Inside;
+        }
+
+        ResizeHandle::None
+    }
+
+    fn handle_resize_drag(&mut self, hwnd: HWND, client: Point, h: ResizeHandle) {
+        let cur = self.client_to_bmp(hwnd, client);
+        let dx = cur.x - self.resize_origin.x;
+        let dy = cur.y - self.resize_origin.y;
+        let orig = self.locked_origin;
+        let min_size = 8;
+
+        let mut l = orig.x;
+        let mut t = orig.y;
+        let mut r = orig.right();
+        let mut b = orig.bottom();
+
+        match h {
+            ResizeHandle::TopLeft => {
+                l = (orig.x + dx).min(orig.right() - min_size);
+                t = (orig.y + dy).min(orig.bottom() - min_size);
+            }
+            ResizeHandle::Top => {
+                t = (orig.y + dy).min(orig.bottom() - min_size);
+            }
+            ResizeHandle::TopRight => {
+                r = (orig.right() + dx).max(orig.x + min_size);
+                t = (orig.y + dy).min(orig.bottom() - min_size);
+            }
+            ResizeHandle::Right => {
+                r = (orig.right() + dx).max(orig.x + min_size);
+            }
+            ResizeHandle::BottomRight => {
+                r = (orig.right() + dx).max(orig.x + min_size);
+                b = (orig.bottom() + dy).max(orig.y + min_size);
+            }
+            ResizeHandle::Bottom => {
+                b = (orig.bottom() + dy).max(orig.y + min_size);
+            }
+            ResizeHandle::BottomLeft => {
+                l = (orig.x + dx).min(orig.right() - min_size);
+                b = (orig.bottom() + dy).max(orig.y + min_size);
+            }
+            ResizeHandle::Left => {
+                l = (orig.x + dx).min(orig.right() - min_size);
+            }
+            ResizeHandle::Inside => {
+                let max_dx = (self.shot.width - orig.right()).max(0);
+                let min_dx = -orig.x;
+                let clamped_dx = dx.clamp(min_dx, max_dx);
+
+                let max_dy = (self.shot.height - orig.bottom()).max(0);
+                let min_dy = -orig.y;
+                let clamped_dy = dy.clamp(min_dy, max_dy);
+
+                l = orig.x + clamped_dx;
+                t = orig.y + clamped_dy;
+                r = l + orig.w;
+                b = t + orig.h;
+            }
+            ResizeHandle::None => return,
+        }
+
+        l = l.clamp(0, (self.shot.width - min_size).max(0));
+        t = t.clamp(0, (self.shot.height - min_size).max(0));
+        r = r.clamp(l + min_size, self.shot.width);
+        b = b.clamp(t + min_size, self.shot.height);
+
+        self.locked = Some(Rect::from_ltrb(l, t, r, b));
+        apply_resize_cursor(h);
+        self.rebuild_composed();
+        self.invalidate(hwnd);
+    }
+
+    fn paint_handles(&self, hdc: windows::Win32::Graphics::Gdi::HDC, dest: Rect, scale: f32) {
+        let size = sc(7, scale).max(5);
+        let half = size / 2;
+        let mut pts = Vec::with_capacity(8);
+
+        pts.push(Point::new(dest.x, dest.y));
+        pts.push(Point::new(dest.right(), dest.y));
+        pts.push(Point::new(dest.right(), dest.bottom()));
+        pts.push(Point::new(dest.x, dest.bottom()));
+
+        if dest.w >= sc(40, scale) {
+            pts.push(Point::new(dest.x + dest.w / 2, dest.y));
+            pts.push(Point::new(dest.x + dest.w / 2, dest.bottom()));
+        }
+        if dest.h >= sc(40, scale) {
+            pts.push(Point::new(dest.x, dest.y + dest.h / 2));
+            pts.push(Point::new(dest.right(), dest.y + dest.h / 2));
+        }
+
+        for p in pts {
+            let r = Rect::new(p.x - half, p.y - half, size, size);
+            crate::native::fill_rect_hdc(hdc, r, Color::rgb(255, 255, 255));
+            crate::native::stroke_rect_hdc(hdc, r, Color::argb(220, 10, 14, 20), 1);
+        }
+    }
+
+    fn nudge_or_expand(&mut self, hwnd: HWND, vk: u32) -> bool {
+        let Some(orig) = self.locked else {
+            return false;
+        };
+        let ctrl = ctrl_down();
+        let alt = alt_down();
+        let shift = shift_down();
+        let step = if shift { 10 } else { 1 };
+        let min_size = 8;
+
+        let mut l = orig.x;
+        let mut t = orig.y;
+        let mut r = orig.right();
+        let mut b = orig.bottom();
+
+        if vk == VK_LEFT.0 as u32 {
+            if ctrl {
+                l -= step;
+            } else if alt {
+                l = (l + step).min(r - min_size);
+            } else {
+                l -= step;
+                r -= step;
+            }
+        } else if vk == VK_RIGHT.0 as u32 {
+            if ctrl {
+                r += step;
+            } else if alt {
+                r = (r - step).max(l + min_size);
+            } else {
+                l += step;
+                r += step;
+            }
+        } else if vk == VK_UP.0 as u32 {
+            if ctrl {
+                t -= step;
+            } else if alt {
+                t = (t + step).min(b - min_size);
+            } else {
+                t -= step;
+                b -= step;
+            }
+        } else if vk == VK_DOWN.0 as u32 {
+            if ctrl {
+                b += step;
+            } else if alt {
+                b = (b - step).max(t + min_size);
+            } else {
+                t += step;
+                b += step;
+            }
+        } else if vk == VK_OEM_PLUS.0 as u32 || vk == VK_ADD.0 as u32 {
+            let pad = if shift { 16 } else { 8 };
+            l -= pad;
+            t -= pad;
+            r += pad;
+            b += pad;
+        } else if vk == VK_OEM_MINUS.0 as u32 || vk == VK_SUBTRACT.0 as u32 {
+            let pad = if shift { 16 } else { 8 };
+            l = (l + pad).min(orig.center().x - min_size / 2);
+            t = (t + pad).min(orig.center().y - min_size / 2);
+            r = (r - pad).max(l + min_size);
+            b = (b - pad).max(t + min_size);
+        } else {
+            return false;
+        }
+
+        l = l.clamp(0, (self.shot.width - min_size).max(0));
+        t = t.clamp(0, (self.shot.height - min_size).max(0));
+        r = r.clamp(l + min_size, self.shot.width);
+        b = b.clamp(t + min_size, self.shot.height);
+
+        self.locked = Some(Rect::from_ltrb(l, t, r, b));
+        self.rebuild_composed();
+        self.invalidate(hwnd);
+        true
+    }
+
     fn on_move(&mut self, hwnd: HWND, client: Point) {
         self.cursor_bmp = self.client_to_bmp(hwnd, client);
         if self.awaiting {
@@ -445,18 +730,28 @@ impl OverlayState {
                 self.invalidate(hwnd);
                 return;
             }
+            if let Some(h) = self.resizing {
+                self.handle_resize_drag(hwnd, client, h);
+                return;
+            }
             let dirty = self.toolbar.set_hover(bmp_pt);
-            if self.toolbar.hit(bmp_pt) == ToolbarResult::Color
-                || self.toolbar.hit(bmp_pt) == ToolbarResult::Width
+            let tb_hit = self.toolbar.hit(bmp_pt);
+            if tb_hit == ToolbarResult::Color
+                || tb_hit == ToolbarResult::Width
                 || self.toolbar.hover_index >= 0
             {
                 cursor_hand();
-            } else if self.toolbar.hit(bmp_pt) == ToolbarResult::Chrome {
+            } else if tb_hit == ToolbarResult::Chrome {
                 cursor_arrow();
-            } else if self.ann.tool_active() {
-                cursor_cross();
             } else {
-                cursor_arrow();
+                let handle = self.hit_resize_handle(hwnd, client);
+                if handle != ResizeHandle::None {
+                    apply_resize_cursor(handle);
+                } else if self.ann.tool_active() {
+                    cursor_cross();
+                } else {
+                    cursor_arrow();
+                }
             }
             if dirty {
                 self.invalidate_toolbar(hwnd);
@@ -464,10 +759,21 @@ impl OverlayState {
             return;
         }
         if self.dragging {
-            let dx = self.cursor_bmp.x - self.drag_start.x;
-            let dy = self.cursor_bmp.y - self.drag_start.y;
-            if dx.abs() >= DRAG_THRESHOLD || dy.abs() >= DRAG_THRESHOLD {
-                self.drag_confirmed = true;
+            let p = self.client_to_bmp(hwnd, client);
+            if key_down(VK_SPACE.0 as i32) {
+                cursor_sizeall();
+                let dx = p.x - self.cursor_bmp.x;
+                let dy = p.y - self.cursor_bmp.y;
+                self.drag_start.x = (self.drag_start.x + dx).clamp(0, self.shot.width);
+                self.drag_start.y = (self.drag_start.y + dy).clamp(0, self.shot.height);
+                self.cursor_bmp = p;
+            } else {
+                self.cursor_bmp = p;
+                let dx = self.cursor_bmp.x - self.drag_start.x;
+                let dy = self.cursor_bmp.y - self.drag_start.y;
+                if dx.abs() >= DRAG_THRESHOLD || dy.abs() >= DRAG_THRESHOLD {
+                    self.drag_confirmed = true;
+                }
             }
         } else {
             self.hover = hit_test(&self.windows, Point::new(self.cursor_bmp.x + self.vs.x, self.cursor_bmp.y + self.vs.y))
@@ -506,6 +812,17 @@ impl OverlayState {
                 return;
             }
             self.end_text(hwnd, true);
+
+            // Check resize handle / edge / inside drag
+            let handle = self.hit_resize_handle(hwnd, client);
+            if handle != ResizeHandle::None {
+                self.resizing = Some(handle);
+                self.resize_origin = self.client_to_bmp(hwnd, client);
+                self.locked_origin = self.locked.unwrap_or_default();
+                apply_resize_cursor(handle);
+                return;
+            }
+
             self.cursor_bmp = bmp_pt;
             let at = self.clamp_sel(self.cursor_bmp);
             if self.ann.is_text_tool() {
@@ -528,6 +845,12 @@ impl OverlayState {
 
     fn on_up(&mut self, hwnd: HWND, client: Point) {
         if self.awaiting {
+            if self.resizing.is_some() {
+                self.resizing = None;
+                self.rebuild_composed();
+                self.invalidate(hwnd);
+                return;
+            }
             if self.ann.has_draft() {
                 self.ann.move_to(self.clamp_sel(self.client_to_bmp(hwnd, client)), shift_down());
                 self.ann.commit_draft();
@@ -595,6 +918,9 @@ impl OverlayState {
                     self.complete(w.bounds);
                 }
             }
+            return;
+        }
+        if self.nudge_or_expand(hwnd, vk) {
             return;
         }
         match vk {
@@ -893,6 +1219,9 @@ impl OverlayState {
                     sc(3, scale),
                 );
                 stroke_rect_hdc(mem_dc, dest, theme::ACCENT, 1);
+                if self.awaiting {
+                    self.paint_handles(mem_dc, dest, scale);
+                }
                 let size_text = format!("{} × {} px", hr.w.max(1), hr.h.max(1));
                 let size_px = sc(12, scale);
                 let (size_w, size_h) = crate::draw::measure_text(&size_text, size_px);
@@ -1034,11 +1363,11 @@ fn paint_capture_hint(
     scale: f32,
 ) {
     let text = if state.drag_confirmed {
-        "松开完成  ·  R 滚动  ·  Esc / 右键取消"
+        "松开完成  ·  按住空格平移  ·  R 滚动  ·  Esc / 右键取消"
     } else if state.scroll_after {
         "拖动框选滚动区域  ·  单击窗口  ·  Esc / 右键取消"
     } else {
-        "拖动框选  ·  单击窗口  ·  R 滚动  ·  Esc / 右键取消"
+        "拖动框选  ·  单击窗口  ·  按住空格平移  ·  R 滚动  ·  Esc / 右键取消"
     };
     let px = sc(14, scale);
     let (tw, th) = crate::draw::measure_text(text, px);
@@ -1157,3 +1486,66 @@ fn lparam_point(lp: LPARAM) -> Point {
     let v = lp.0 as u32;
     Point::new((v & 0xFFFF) as i16 as i32, ((v >> 16) & 0xFFFF) as i16 as i32)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_resize_handle_delta_calculation() {
+        let orig = Rect::new(100, 100, 200, 150);
+        let shot_w = 1920;
+        let shot_h = 1080;
+        let min_size = 8;
+
+        // Simulate dragging Right handle by +30px
+        let dx = 30;
+        let _dy = 0;
+        let r = (orig.right() + dx).max(orig.x + min_size).clamp(orig.x + min_size, shot_w);
+        assert_eq!(r, 330);
+        assert_eq!(r - orig.x, 230); // 200 + 30
+
+        // Simulate dragging TopLeft handle by (-20, -15)
+        let dx = -20;
+        let dy = -15;
+        let l = (orig.x + dx).min(orig.right() - min_size).clamp(0, shot_w - min_size);
+        let t = (orig.y + dy).min(orig.bottom() - min_size).clamp(0, shot_h - min_size);
+        assert_eq!(l, 80);
+        assert_eq!(t, 85);
+        assert_eq!(orig.right() - l, 220); // 200 + 20
+        assert_eq!(orig.bottom() - t, 165); // 150 + 15
+
+        // Simulate dragging TopLeft PAST BottomRight (prevent inversion)
+        let dx = 500;
+        let dy = 500;
+        let l = (orig.x + dx).min(orig.right() - min_size);
+        let t = (orig.y + dy).min(orig.bottom() - min_size);
+        assert_eq!(l, orig.right() - min_size);
+        assert_eq!(t, orig.bottom() - min_size);
+    }
+
+    #[test]
+    fn test_spacebar_pan_preserves_dimensions() {
+        let mut drag_start = Point::new(100, 100);
+        let mut cursor_bmp = Point::new(300, 250);
+
+        let initial_w = cursor_bmp.x - drag_start.x;
+        let initial_h = cursor_bmp.y - drag_start.y;
+        assert_eq!(initial_w, 200);
+        assert_eq!(initial_h, 150);
+
+        // User moves mouse from (300, 250) to (340, 280) while holding spacebar
+        let new_mouse = Point::new(340, 280);
+        let dx = new_mouse.x - cursor_bmp.x;
+        let dy = new_mouse.y - cursor_bmp.y;
+        drag_start.x += dx;
+        drag_start.y += dy;
+        cursor_bmp = new_mouse;
+
+        assert_eq!(drag_start, Point::new(140, 130));
+        assert_eq!(cursor_bmp, Point::new(340, 280));
+        assert_eq!(cursor_bmp.x - drag_start.x, 200);
+        assert_eq!(cursor_bmp.y - drag_start.y, 150);
+    }
+}
+
