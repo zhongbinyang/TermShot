@@ -337,6 +337,7 @@ impl AnnotationSession {
         }
     }
 
+    #[cfg(target_os = "windows")]
     pub fn paint_draft_hdc<F>(&self, hdc: windows::Win32::Graphics::Gdi::HDC, map: F, width_scale: f32)
     where
         F: Fn(Point) -> Point,
@@ -405,6 +406,113 @@ impl AnnotationSession {
                     let pts: Vec<Point> = path.iter().copied().map(&map).collect();
                     crate::native::polyline_hdc(
                         hdc,
+                        &pts,
+                        Color::argb(180, 80, 80, 80),
+                        (w * 3.0).round().max(4.0) as i32,
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn paint_draft_canvas<F>(&self, ctx: *mut core::ffi::c_void, map: F, width_scale: f32)
+    where
+        F: Fn(Point) -> Point,
+    {
+        let Some(d) = &self.draft else {
+            return;
+        };
+        let w = (d.width * width_scale.max(0.15)).max(1.0);
+        let from = map(d.from);
+        let to = map(d.to);
+        match d.kind {
+            AnnotKind::Arrow => crate::macos::native::paint_arrow_canvas(ctx, from, to, d.color, w),
+            AnnotKind::Line => {
+                crate::macos::native::line_canvas(
+                    ctx,
+                    from.x,
+                    from.y,
+                    to.x,
+                    to.y,
+                    Color::argb(140, 0, 0, 0),
+                    (w + 2.2).round() as i32,
+                );
+                crate::macos::native::line_canvas(
+                    ctx,
+                    from.x,
+                    from.y,
+                    to.x,
+                    to.y,
+                    d.color,
+                    w.round().max(1.0) as i32,
+                );
+            }
+            AnnotKind::Rect => {
+                let r = crate::geom::Rect::from_ltrb(
+                    from.x.min(to.x),
+                    from.y.min(to.y),
+                    from.x.max(to.x),
+                    from.y.max(to.y),
+                );
+                crate::macos::native::stroke_rect_canvas(
+                    ctx,
+                    r,
+                    Color::argb(140, 0, 0, 0),
+                    (w + 2.0).round() as i32,
+                );
+                crate::macos::native::stroke_rect_canvas(
+                    ctx,
+                    r,
+                    d.color,
+                    w.round().max(1.0) as i32,
+                );
+            }
+            AnnotKind::Ellipse => {
+                let r = crate::geom::Rect::from_ltrb(
+                    from.x.min(to.x),
+                    from.y.min(to.y),
+                    from.x.max(to.x),
+                    from.y.max(to.y),
+                );
+                crate::macos::native::ellipse_stroke_canvas(
+                    ctx,
+                    r,
+                    d.color,
+                    w.round().max(1.0) as i32,
+                );
+            }
+            AnnotKind::Pencil | AnnotKind::Marker | AnnotKind::Eraser => {
+                if let Some(path) = &d.path {
+                    let pts: Vec<Point> = path.iter().copied().map(&map).collect();
+                    let cw = if d.kind == AnnotKind::Marker {
+                        w * 2.7
+                    } else if d.kind == AnnotKind::Eraser {
+                        w * 2.2
+                    } else {
+                        w
+                    };
+                    let col = if d.kind == AnnotKind::Marker {
+                        d.color.with_alpha(160)
+                    } else if d.kind == AnnotKind::Eraser {
+                        Color::argb(180, 255, 255, 255)
+                    } else {
+                        d.color
+                    };
+                    crate::macos::native::polyline_canvas(
+                        ctx,
+                        &pts,
+                        col,
+                        cw.round().max(1.0) as i32,
+                    );
+                }
+            }
+            AnnotKind::Mosaic => {
+                if let Some(path) = &d.path {
+                    let pts: Vec<Point> = path.iter().copied().map(&map).collect();
+                    crate::macos::native::polyline_canvas(
+                        ctx,
                         &pts,
                         Color::argb(180, 80, 80, 80),
                         (w * 3.0).round().max(4.0) as i32,

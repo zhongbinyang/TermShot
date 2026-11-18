@@ -1,4 +1,10 @@
 #![allow(dead_code)]
+
+#[cfg(target_os = "macos")]
+pub use crate::macos::native::*;
+
+#[cfg(target_os = "windows")]
+mod win_impl {
 use crate::geom::{Color, Point, Rect};
 use crate::util::wide;
 use windows::core::Result;
@@ -498,3 +504,7 @@ pub const MOD_CONTROL_BIT: u32 = MOD_CONTROL.0;
 pub const MOD_SHIFT_BIT: u32 = MOD_SHIFT.0;
 pub const MOD_ALT_BIT: u32 = MOD_ALT.0;
 pub const MOD_WIN_BIT: u32 = MOD_WIN.0;
+}
+
+#[cfg(target_os = "windows")]
+pub use win_impl::*;

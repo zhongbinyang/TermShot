@@ -622,8 +622,10 @@ name = "termshot"
 version = "1.0.0"
 dependencies = [
  "base64",
+ "cc",
  "embed-resource",
  "image",
+ "libc",
  "regex",
  "serde",
  "serde_json",

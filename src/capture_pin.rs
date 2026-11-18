@@ -1,3 +1,8 @@
+#[cfg(target_os = "macos")]
+pub use crate::macos::capture_pin::run;
+
+#[cfg(target_os = "windows")]
+mod win_imp {
 use crate::annotation::{AnnotKind, AnnotationSession};
 use crate::bitmap::Bitmap;
 use crate::geom::{Point, Rect};
@@ -544,3 +549,7 @@ impl PinAsk {
         }
     }
 }
+}
+
+#[cfg(target_os = "windows")]
+pub use win_imp::run;

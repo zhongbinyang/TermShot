@@ -1,3 +1,9 @@
+#[cfg(target_os = "macos")]
+#[allow(unused_imports)]
+pub use crate::macos::app::{request_image_ai, run_tray, ImageAiKind};
+
+#[cfg(target_os = "windows")]
+mod win_imp {
 use crate::bitmap::{capture_virtual_screen, try_save_png};
 use crate::geom::Point;
 use crate::icon;
@@ -631,3 +637,7 @@ fn update_tray_tip(app: &mut App) {
         let _ = Shell_NotifyIconW(NIM_MODIFY, &app.nid);
     }
 }
+}
+
+#[cfg(target_os = "windows")]
+pub use win_imp::{request_image_ai, run_tray, ImageAiKind};

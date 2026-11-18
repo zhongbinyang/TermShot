@@ -1,4 +1,4 @@
-#![windows_subsystem = "windows"]
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
 mod annotation;
 mod app;
@@ -9,6 +9,8 @@ mod draw;
 mod geom;
 mod icon;
 mod install;
+#[cfg(target_os = "macos")]
+mod macos;
 mod native;
 mod overlay;
 mod pin;
@@ -25,25 +27,40 @@ mod util;
 mod vision;
 mod windows_enum;
 
-use windows::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
-use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
-use windows::Win32::System::Threading::CreateMutexW;
-
 fn main() {
+    #[cfg(target_os = "windows")]
     unsafe {
-        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        let _ = windows::Win32::System::Com::CoInitializeEx(
+            None,
+            windows::Win32::System::Com::COINIT_APARTMENTTHREADED,
+        );
     }
     crate::native::enable_dpi();
 
     let args: Vec<String> = std::env::args().collect();
     if has(&args, "--write-icon") {
+        let default_dest = if cfg!(target_os = "macos") {
+            "assets/AppIcon.icns"
+        } else {
+            "assets/app.ico"
+        };
         let dest = args
             .iter()
             .position(|a| a == "--write-icon")
             .and_then(|i| args.get(i + 1))
             .cloned()
-            .unwrap_or_else(|| "assets/app.ico".into());
-        if let Err(e) = icon::write_ico(std::path::Path::new(&dest)) {
+            .unwrap_or_else(|| default_dest.into());
+        let path = std::path::Path::new(&dest);
+        let res = if path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("icns"))
+        {
+            icon::write_icns(path)
+        } else {
+            icon::write_ico(path)
+        };
+        if let Err(e) = res {
             eprintln!("{e}");
             std::process::exit(1);
         }
@@ -63,7 +80,10 @@ fn main() {
         return;
     }
 
+    #[cfg(target_os = "windows")]
     unsafe {
+        use windows::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
+        use windows::Win32::System::Threading::CreateMutexW;
         let name = util::wide("Local\\TermShot.SingleInstance");
         let _mutex = CreateMutexW(None, true, windows::core::PCWSTR(name.as_ptr()));
         if GetLastError() == ERROR_ALREADY_EXISTS {
@@ -71,7 +91,39 @@ fn main() {
         }
     }
 
+    #[cfg(target_os = "macos")]
+    {
+        if !acquire_macos_single_instance_lock() {
+            return;
+        }
+    }
+
     app::run_tray();
+}
+
+#[cfg(target_os = "macos")]
+fn acquire_macos_single_instance_lock() -> bool {
+    use std::os::unix::io::AsRawFd;
+    let dir = settings::Settings::dir();
+    if std::fs::create_dir_all(&dir).is_err() {
+        return true;
+    }
+    let lock_path = dir.join("termshot.lock");
+    let Ok(file) = std::fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_path)
+    else {
+        return true;
+    };
+    let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if rc != 0 {
+        return false;
+    }
+    std::mem::forget(file);
+    true
 }
 
 fn has(args: &[String], flag: &str) -> bool {

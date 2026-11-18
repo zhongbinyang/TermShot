@@ -1,40 +1,53 @@
-use crate::annotation::{AnnotKind, AnnotationSession};
-use crate::bitmap::{Bitmap, GdiBitmap};
-use crate::draw::fill_rect;
-use crate::geom::{Color, Point, Rect};
-use crate::native::{
-    alt_down, apply_cursor_cross, capture, ctrl_down, cursor_arrow, cursor_cross, cursor_hand,
-    cursor_pos, cursor_sizeall, cursor_sizenesw, cursor_sizens, cursor_sizenwse, cursor_sizewe,
-    dpi_scale_at, dpi_scale_hwnd, hinstance, key_down, monitor_from_point, place_topmost,
-    release_capture, sc, set_foreground, shift_down, stroke_rect_hdc, virtual_screen, WM_SETCURSOR,
-};
+use crate::annotation::AnnotationSession;
+use crate::geom::Rect;
 use crate::settings::PostCaptureAction;
-use crate::theme;
-use crate::toolbar::{ActionToolbar, ToolbarResult};
-use crate::util::{clamp_i32, wide};
-use crate::windows_enum::{hit_test, WindowInfo};
-use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
-use windows::Win32::Graphics::Gdi::{
-    BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateSolidBrush, DeleteDC,
-    DeleteObject, EndPaint, InvalidateRect, SelectObject, SetBkColor, SetTextColor, SetWindowOrgEx,
-    HBRUSH, PAINTSTRUCT, SRCCOPY,
-};
-use windows::Win32::UI::Input::KeyboardAndMouse::{
-    VK_1, VK_2, VK_3, VK_4, VK_A, VK_ADD, VK_B, VK_C, VK_DOWN, VK_E, VK_ESCAPE, VK_H, VK_L,
-    VK_LEFT, VK_M, VK_O, VK_OEM_MINUS, VK_OEM_PLUS, VK_P, VK_R, VK_RETURN, VK_RIGHT, VK_S,
-    VK_SPACE, VK_SUBTRACT, VK_T, VK_TAB, VK_UP, VK_X, VK_Z,
-};
-use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect, GetMessageW,
-    PostQuitMessage, RegisterClassExW, SetWindowLongPtrW, ShowWindow, TranslateMessage, WM_SIZE,
-    CS_DBLCLKS, GWLP_USERDATA, MSG, SW_SHOW, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_KEYDOWN,
-    WM_CTLCOLOREDIT, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_RBUTTONDOWN,
-    WM_SYSKEYDOWN, WNDCLASSEXW,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
-};
 
+#[cfg(target_os = "windows")]
+mod win_imports {
+    pub use crate::annotation::AnnotKind;
+    pub use crate::bitmap::{Bitmap, GdiBitmap};
+    pub use crate::draw::fill_rect;
+    pub use crate::geom::{Color, Point, Rect};
+    pub use crate::native::{
+        alt_down, apply_cursor_cross, capture, ctrl_down, cursor_arrow, cursor_cross, cursor_hand,
+        cursor_pos, cursor_sizeall, cursor_sizenesw, cursor_sizens, cursor_sizenwse, cursor_sizewe,
+        dpi_scale_at, dpi_scale_hwnd, hinstance, key_down, monitor_from_point, place_topmost,
+        release_capture, sc, set_foreground, shift_down, stroke_rect_hdc, virtual_screen,
+        WM_SETCURSOR,
+    };
+    pub use crate::settings::PostCaptureAction;
+    pub use crate::theme;
+    pub use crate::toolbar::{ActionToolbar, ToolbarResult};
+    pub use crate::util::{clamp_i32, wide};
+    pub use crate::windows_enum::{hit_test, WindowInfo};
+    pub use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
+    pub use windows::Win32::Graphics::Gdi::{
+        BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateSolidBrush, DeleteDC,
+        DeleteObject, EndPaint, InvalidateRect, SelectObject, SetBkColor, SetTextColor,
+        SetWindowOrgEx, HBRUSH, PAINTSTRUCT, SRCCOPY,
+    };
+    pub use windows::Win32::UI::Input::KeyboardAndMouse::{
+        VK_1, VK_2, VK_3, VK_4, VK_A, VK_ADD, VK_B, VK_C, VK_DOWN, VK_E, VK_ESCAPE, VK_H, VK_L,
+        VK_LEFT, VK_M, VK_O, VK_OEM_MINUS, VK_OEM_PLUS, VK_P, VK_R, VK_RETURN, VK_RIGHT, VK_S,
+        VK_SPACE, VK_SUBTRACT, VK_T, VK_TAB, VK_UP, VK_X, VK_Z,
+    };
+    pub use windows::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect,
+        GetMessageW, PostQuitMessage, RegisterClassExW, SetWindowLongPtrW, ShowWindow,
+        TranslateMessage, CS_DBLCLKS, GWLP_USERDATA, MSG, SW_SHOW, WM_CTLCOLOREDIT, WM_DESTROY,
+        WM_DPICHANGED, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+        WM_PAINT, WM_RBUTTONDOWN, WM_SIZE, WM_SYSKEYDOWN, WNDCLASSEXW, WS_EX_TOOLWINDOW,
+        WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
+    };
+}
+#[cfg(target_os = "windows")]
+use win_imports::*;
+
+#[cfg(target_os = "windows")]
 const DRAG_THRESHOLD: i32 = 4;
+#[cfg(target_os = "windows")]
 const MAG_SRC: i32 = 13;
+#[cfg(target_os = "windows")]
 const MAG_ZOOM: i32 = 10;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -58,6 +71,7 @@ pub struct OverlayResult {
     pub session: AnnotationSession,
 }
 
+#[cfg(target_os = "windows")]
 struct OverlayState {
     shot: Bitmap,
     veiled: Bitmap,
@@ -89,12 +103,14 @@ struct OverlayState {
     locked_origin: Rect,
 }
 
+#[cfg(target_os = "windows")]
 struct Outcome {
     selected: Option<Rect>,
     scroll: bool,
     action: Option<PostCaptureAction>,
 }
 
+#[cfg(target_os = "windows")]
 pub fn run(
     shot: Bitmap,
     windows: Vec<WindowInfo>,
@@ -237,10 +253,12 @@ pub fn run(
     }
 }
 
+#[cfg(target_os = "windows")]
 fn is_window_ok(h: HWND) -> bool {
     crate::native::is_window(h)
 }
 
+#[cfg(target_os = "windows")]
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if msg == windows::Win32::UI::WindowsAndMessaging::WM_NCCREATE {
         let cs = &*(lparam.0 as *const windows::Win32::UI::WindowsAndMessaging::CREATESTRUCTW);
@@ -256,6 +274,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
     (*ptr).handle(hwnd, msg, wparam, lparam)
 }
 
+#[cfg(target_os = "windows")]
 fn apply_resize_cursor(h: ResizeHandle) {
     match h {
         ResizeHandle::TopLeft | ResizeHandle::BottomRight => cursor_sizenwse(),
@@ -267,6 +286,7 @@ fn apply_resize_cursor(h: ResizeHandle) {
     }
 }
 
+#[cfg(target_os = "windows")]
 impl OverlayState {
     fn handle(&mut self, hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
         match msg {
@@ -1323,6 +1343,7 @@ impl OverlayState {
     }
 }
 
+#[cfg(target_os = "windows")]
 fn veil_shot(shot: &Bitmap) -> Bitmap {
     let mut v = shot.clone();
     for p in v.pixels.iter_mut() {
@@ -1337,6 +1358,7 @@ fn veil_shot(shot: &Bitmap) -> Bitmap {
     v
 }
 
+#[cfg(target_os = "windows")]
 fn paint_chip(
     hdc: windows::Win32::Graphics::Gdi::HDC,
     r: Rect,
@@ -1356,6 +1378,7 @@ fn paint_chip(
     );
 }
 
+#[cfg(target_os = "windows")]
 fn paint_capture_hint(
     hdc: windows::Win32::Graphics::Gdi::HDC,
     state: &OverlayState,
@@ -1383,10 +1406,12 @@ fn paint_capture_hint(
     paint_chip(hdc, r, text, scale);
 }
 
+#[cfg(target_os = "windows")]
 fn gdi_line(hdc: windows::Win32::Graphics::Gdi::HDC, x0: i32, y0: i32, x1: i32, y1: i32, c: Color, width: i32) {
     crate::native::line_hdc(hdc, x0, y0, x1, y1, c, width);
 }
 
+#[cfg(target_os = "windows")]
 fn paint_magnifier_hdc(
     hdc: windows::Win32::Graphics::Gdi::HDC,
     shot: &Bitmap,
@@ -1482,6 +1507,7 @@ fn paint_magnifier_hdc(
     frame.blit_to_hdc(hdc, Rect::new(dx, dy, total_w, total_h));
 }
 
+#[cfg(target_os = "windows")]
 fn lparam_point(lp: LPARAM) -> Point {
     let v = lp.0 as u32;
     Point::new((v & 0xFFFF) as i16 as i32, ((v >> 16) & 0xFFFF) as i16 as i32)
@@ -1489,7 +1515,7 @@ fn lparam_point(lp: LPARAM) -> Point {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::super::geom::{Point, Rect};
 
     #[test]
     fn test_resize_handle_delta_calculation() {

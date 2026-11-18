@@ -3,7 +3,9 @@ use crate::native::virtual_screen;
 use crate::settings::Settings;
 use image::RgbaImage;
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "windows")]
 use windows::Win32::Foundation::HWND;
+#[cfg(target_os = "windows")]
 use windows::Win32::Graphics::Gdi::{
     BitBlt, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetDC, ReleaseDC,
     SelectObject, SetStretchBltMode, StretchBlt, StretchDIBits, BITMAPINFO, BITMAPINFOHEADER,
@@ -194,10 +196,12 @@ impl Bitmap {
         out
     }
 
+    #[cfg(target_os = "windows")]
     pub fn blit_to_hdc(&self, hdc: HDC, dest: Rect) {
         self.blit_region_to_hdc(hdc, dest, Rect::new(0, 0, self.width, self.height));
     }
 
+    #[cfg(target_os = "windows")]
     pub fn blit_region_to_hdc(&self, hdc: HDC, dest: Rect, src: Rect) {
         let src = src.intersect(Rect::new(0, 0, self.width, self.height));
         if src.w < 1 || src.h < 1 || dest.w < 1 || dest.h < 1 || self.pixels.is_empty() {
@@ -226,6 +230,7 @@ impl Bitmap {
 
 /// Screen-backed DIB selected into a memory DC. BitBlt uses top-left origin,
 /// unlike StretchDIBits on a top-down packed DIB (YSrc is unreliable).
+#[cfg(target_os = "windows")]
 pub struct GdiBitmap {
     hdc: HDC,
     hbmp: HBITMAP,
@@ -234,6 +239,7 @@ pub struct GdiBitmap {
     pub h: i32,
 }
 
+#[cfg(target_os = "windows")]
 impl GdiBitmap {
     pub fn from_bitmap(bmp: &Bitmap) -> Option<Self> {
         if bmp.width <= 0 || bmp.height <= 0 || bmp.pixels.is_empty() {
@@ -312,6 +318,7 @@ impl GdiBitmap {
     }
 }
 
+#[cfg(target_os = "windows")]
 impl Drop for GdiBitmap {
     fn drop(&mut self) {
         unsafe {
@@ -326,6 +333,7 @@ impl Drop for GdiBitmap {
     }
 }
 
+#[cfg(target_os = "windows")]
 fn dib_info(w: i32, h: i32) -> BITMAPINFO {
     BITMAPINFO {
         bmiHeader: BITMAPINFOHEADER {
@@ -346,6 +354,7 @@ pub fn capture_virtual_screen() -> Result<Bitmap, String> {
     capture_rect(virtual_screen())
 }
 
+#[cfg(target_os = "windows")]
 pub fn capture_rect(screen: Rect) -> Result<Bitmap, String> {
     if screen.w <= 0 || screen.h <= 0 {
         return Err("截取区域无效。".into());
@@ -397,6 +406,11 @@ pub fn capture_rect(screen: Rect) -> Result<Bitmap, String> {
     }
 }
 
+#[cfg(target_os = "macos")]
+pub fn capture_rect(screen: Rect) -> Result<Bitmap, String> {
+    crate::macos::ffi::capture_screen_rect(screen)
+}
+
 pub fn next_png_path(dir: &Path) -> PathBuf {
     let stamp = chrono_like_stamp();
     let path = dir.join(format!("{stamp}.png"));
@@ -412,12 +426,32 @@ pub fn next_png_path(dir: &Path) -> PathBuf {
     dir.join(format!("{stamp}-{}.png", std::process::id()))
 }
 
+#[cfg(target_os = "windows")]
 fn chrono_like_stamp() -> String {
     unsafe {
         let st = windows::Win32::System::SystemInformation::GetLocalTime();
         format!(
             "{:04}{:02}{:02}-{:02}{:02}{:02}",
             st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond
+        )
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn chrono_like_stamp() -> String {
+    unsafe {
+        let mut now: libc::time_t = 0;
+        libc::time(&mut now);
+        let mut tm: libc::tm = std::mem::zeroed();
+        libc::localtime_r(&now, &mut tm);
+        format!(
+            "{:04}{:02}{:02}-{:02}{:02}{:02}",
+            tm.tm_year + 1900,
+            tm.tm_mon + 1,
+            tm.tm_mday,
+            tm.tm_hour,
+            tm.tm_min,
+            tm.tm_sec
         )
     }
 }

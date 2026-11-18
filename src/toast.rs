@@ -1,30 +1,42 @@
-use crate::geom::Rect;
-use crate::native::{cursor_pos, dpi_scale_at, hinstance, place_topmost, sc, work_area_from_point};
-use crate::theme;
-use crate::util::wide;
-use std::sync::atomic::{AtomicPtr, Ordering};
-use std::sync::Mutex;
-use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
-use windows::Win32::Graphics::Gdi::{
-    BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW, CreatePen,
-    CreateRoundRectRgn, CreateSolidBrush, DeleteDC, DeleteObject, DrawTextW, EndPaint, GetDC,
-    ReleaseDC, RoundRect, SelectObject, SetBkMode, SetTextColor, SetWindowRgn,
-    CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DT_CALCRECT, DT_END_ELLIPSIS, DT_LEFT,
-    DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER, DT_WORDBREAK, FW_BOLD, FW_NORMAL, HFONT,
-    OUT_DEFAULT_PRECIS, PAINTSTRUCT, PS_SOLID, SRCCOPY, TRANSPARENT,
-};
-use windows::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT};
-use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindowLongPtrW, KillTimer, LoadCursorW,
-    PostMessageW, RegisterClassExW, SetCursor, SetTimer, SetWindowLongPtrW, CS_DBLCLKS,
-    GWLP_USERDATA, IDC_HAND, WM_APP, WM_DESTROY, WM_LBUTTONDOWN, WM_MOUSEMOVE, WM_PAINT,
-    WM_SETCURSOR, WM_TIMER, WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
-    WS_POPUP, WS_VISIBLE,
-};
+#[cfg(target_os = "windows")]
+mod win_imports {
+    pub use crate::geom::Rect;
+    pub use crate::native::{
+        cursor_pos, dpi_scale_at, hinstance, place_topmost, sc, work_area_from_point,
+    };
+    pub use crate::theme;
+    pub use crate::util::wide;
+    pub use std::sync::atomic::{AtomicPtr, Ordering};
+    pub use std::sync::Mutex;
+    pub use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
+    pub use windows::Win32::Graphics::Gdi::{
+        BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW, CreatePen,
+        CreateRoundRectRgn, CreateSolidBrush, DeleteDC, DeleteObject, DrawTextW, EndPaint, GetDC,
+        ReleaseDC, RoundRect, SelectObject, SetBkMode, SetTextColor, SetWindowRgn,
+        CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DT_CALCRECT, DT_END_ELLIPSIS,
+        DT_LEFT, DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER, DT_WORDBREAK, FW_BOLD, FW_NORMAL, HFONT,
+        OUT_DEFAULT_PRECIS, PAINTSTRUCT, PS_SOLID, SRCCOPY, TRANSPARENT,
+    };
+    pub use windows::Win32::UI::Input::KeyboardAndMouse::{
+        TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT,
+    };
+    pub use windows::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindowLongPtrW, KillTimer,
+        LoadCursorW, PostMessageW, RegisterClassExW, SetCursor, SetTimer, SetWindowLongPtrW,
+        CS_DBLCLKS, GWLP_USERDATA, IDC_HAND, WM_APP, WM_DESTROY, WM_LBUTTONDOWN, WM_MOUSEMOVE,
+        WM_PAINT, WM_SETCURSOR, WM_TIMER, WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+        WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
+    };
+}
+#[cfg(target_os = "windows")]
+use win_imports::*;
 
+#[cfg(target_os = "windows")]
 pub const WM_SHOW_TOAST: u32 = WM_APP + 40;
+#[cfg(target_os = "windows")]
 const WM_MOUSELEAVE: u32 = 0x02A3;
 
+#[cfg(target_os = "windows")]
 struct Toast {
     kind: ToastKind,
     title: String,
@@ -36,6 +48,7 @@ struct Toast {
     hovering: bool,
 }
 
+#[cfg(target_os = "windows")]
 #[derive(Clone, Copy)]
 enum ToastKind {
     Info,
@@ -43,17 +56,26 @@ enum ToastKind {
     Error,
 }
 
+#[cfg(target_os = "windows")]
 static HOST: AtomicPtr<core::ffi::c_void> = AtomicPtr::new(std::ptr::null_mut());
+#[cfg(target_os = "windows")]
 static TOASTS: Mutex<Vec<isize>> = Mutex::new(Vec::new());
 
+#[cfg(target_os = "windows")]
 pub fn set_host(hwnd: HWND) {
     HOST.store(hwnd.0, Ordering::SeqCst);
 }
 
+#[cfg(target_os = "windows")]
 pub fn show(title: &str, text: &str) {
     show_kind(ToastKind::Info, title, text);
 }
+#[cfg(target_os = "macos")]
+pub fn show(title: &str, text: &str) {
+    crate::macos::toast::show(title, text);
+}
 
+#[cfg(target_os = "windows")]
 fn show_kind(kind: ToastKind, title: &str, text: &str) {
     let host = HWND(HOST.load(Ordering::SeqCst));
     if host.0.is_null() {
@@ -70,18 +92,34 @@ fn show_kind(kind: ToastKind, title: &str, text: &str) {
     }
 }
 
+#[cfg(target_os = "windows")]
 pub fn show_error(title: &str, text: &str) {
     show_kind(ToastKind::Error, title, text);
 }
+#[cfg(target_os = "macos")]
+pub fn show_error(title: &str, text: &str) {
+    crate::macos::toast::show_error(title, text);
+}
 
+#[cfg(target_os = "windows")]
 pub fn show_success(title: &str, text: &str) {
     show_kind(ToastKind::Success, title, text);
 }
+#[cfg(target_os = "macos")]
+pub fn show_success(title: &str, text: &str) {
+    crate::macos::toast::show_success(title, text);
+}
 
+#[cfg(target_os = "windows")]
 pub fn show_info(title: &str, text: &str) {
     show_kind(ToastKind::Info, title, text);
 }
+#[cfg(target_os = "macos")]
+pub fn show_info(title: &str, text: &str) {
+    crate::macos::toast::show_info(title, text);
+}
 
+#[cfg(target_os = "windows")]
 pub fn dispatch(lparam: LPARAM) {
     let p = lparam.0 as *mut (ToastKind, String, String);
     if p.is_null() {
@@ -91,6 +129,7 @@ pub fn dispatch(lparam: LPARAM) {
     show_now(b.0, &b.1, &b.2);
 }
 
+#[cfg(target_os = "windows")]
 fn measure_text_height(text: &str, max_w: i32, scale: f32) -> i32 {
     if text.trim().is_empty() {
         return 0;
@@ -114,7 +153,13 @@ fn measure_text_height(text: &str, max_w: i32, scale: f32) -> i32 {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn measure_text_height(text: &str, max_w: i32, scale: f32) -> i32 {
+    crate::macos::ffi::measure_wrapped_text(text, max_w, crate::native::sc(11, scale), false)
+}
+
 pub(crate) fn compute_toast_dims(text: &str, scale: f32) -> (i32, i32, u32) {
+    let sc = crate::native::sc;
     let w = sc(400, scale);
     let content_pad_x = sc(32, scale); // 18 left + 14 right
     let text_w = w - content_pad_x;
@@ -132,6 +177,7 @@ pub(crate) fn compute_toast_dims(text: &str, scale: f32) -> (i32, i32, u32) {
     (w, h, duration)
 }
 
+#[cfg(target_os = "windows")]
 fn show_now(kind: ToastKind, title: &str, text: &str) {
     unsafe {
         let cur_pt = cursor_pos();
@@ -200,6 +246,7 @@ fn show_now(kind: ToastKind, title: &str, text: &str) {
     }
 }
 
+#[cfg(target_os = "windows")]
 pub fn close() {
     unsafe {
         let list = TOASTS
@@ -211,7 +258,12 @@ pub fn close() {
         }
     }
 }
+#[cfg(target_os = "macos")]
+pub fn close() {
+    crate::macos::toast::close();
+}
 
+#[cfg(target_os = "windows")]
 unsafe fn toast_stack_height(scale: f32) -> i32 {
     let list = TOASTS.lock().map(|list| list.clone()).unwrap_or_default();
     list.into_iter()
@@ -222,6 +274,7 @@ unsafe fn toast_stack_height(scale: f32) -> i32 {
         .sum()
 }
 
+#[cfg(target_os = "windows")]
 fn make_font(px: i32, bold: bool) -> HFONT {
     unsafe {
         CreateFontW(
@@ -243,6 +296,7 @@ fn make_font(px: i32, bold: bool) -> HFONT {
     }
 }
 
+#[cfg(target_os = "windows")]
 unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if msg == windows::Win32::UI::WindowsAndMessaging::WM_NCCREATE {
         let cs = &*(lparam.0 as *const windows::Win32::UI::WindowsAndMessaging::CREATESTRUCTW);
@@ -420,6 +474,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
     }
 }
 
+#[cfg(target_os = "windows")]
 unsafe fn reflow_toasts() {
     let cursor = cursor_pos();
     let work = work_area_from_point(cursor);

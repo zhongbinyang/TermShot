@@ -158,6 +158,9 @@ pub fn format_hotkey(modifiers: u32, key: u32) -> String {
         out.push("Alt");
     }
     if modifiers & MOD_WIN_BIT != 0 {
+        #[cfg(target_os = "macos")]
+        out.push("Cmd");
+        #[cfg(not(target_os = "macos"))]
         out.push("Win");
     }
     out.push(format_key(key));

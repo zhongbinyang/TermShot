@@ -1,44 +1,61 @@
 use crate::bitmap::Bitmap;
-use crate::geom::{Color, Rect};
-use crate::native::{
-    cursor_pos, dpi_scale_at, enable_dark_title, hinstance, sc, work_area_from_point,
-};
-use crate::theme;
-use crate::util::wide;
-use std::sync::atomic::{AtomicPtr, Ordering};
+use crate::geom::Rect;
+use crate::native::sc;
 use std::sync::Arc;
-use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
-use windows::Win32::Graphics::Gdi::{
-    BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW, CreatePen,
-    CreateSolidBrush, DeleteDC, DeleteObject, DrawTextW, EndPaint, FillRect, InvalidateRect,
-    RoundRect, ScreenToClient, SelectObject, SetBkColor, SetBkMode, SetTextColor,
-    CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DRAW_TEXT_FORMAT, DT_CENTER, DT_LEFT,
-    DT_NOPREFIX, DT_RIGHT, DT_SINGLELINE, DT_VCENTER, FW_BOLD, FW_NORMAL, HBRUSH, HDC, HFONT, HPEN,
-    OUT_DEFAULT_PRECIS, PAINTSTRUCT, PS_SOLID, SRCCOPY, TRANSPARENT,
-};
-use windows::Win32::UI::Controls::{DRAWITEMSTRUCT, ODS_DISABLED, ODS_SELECTED};
-use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT};
-use windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
-use windows::Win32::UI::WindowsAndMessaging::{
-    AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect,
-    GetWindowLongPtrW, IsWindow, LoadCursorW, MoveWindow, RegisterClassExW, SendMessageW,
-    SetCursor, SetTimer, KillTimer, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow, BN_CLICKED,
-    BS_OWNERDRAW, CREATESTRUCTW, ES_AUTOVSCROLL, ES_MULTILINE, ES_NOHIDESEL, ES_READONLY,
-    GWLP_USERDATA, HMENU, HWND_TOPMOST, IDC_ARROW, IDC_HAND, MINMAXINFO, SW_HIDE, SW_SHOW, SWP_NOACTIVATE,
-    SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_SHOWNOACTIVATE, WINDOW_EX_STYLE, WM_COMMAND,
-    WM_CTLCOLOREDIT, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DRAWITEM, WM_ERASEBKGND, WM_GETMINMAXINFO,
-    WM_KEYDOWN, WM_MOUSEMOVE, WM_NCCREATE, WM_PAINT, WM_SETCURSOR, WM_SETFONT, WM_SIZE, WM_TIMER, WNDCLASSEXW,
-    WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_OVERLAPPED,
-    WS_SIZEBOX, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
-};
 
+#[cfg(target_os = "windows")]
+mod win_imports {
+    pub use crate::geom::Color;
+    pub use crate::native::{cursor_pos, dpi_scale_at, enable_dark_title, hinstance, work_area_from_point};
+    pub use crate::theme;
+    pub use crate::util::wide;
+    pub use std::sync::atomic::{AtomicPtr, Ordering};
+    pub use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
+    pub use windows::Win32::Graphics::Gdi::{
+        BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW, CreatePen,
+        CreateSolidBrush, DeleteDC, DeleteObject, DrawTextW, EndPaint, FillRect, InvalidateRect,
+        RoundRect, ScreenToClient, SelectObject, SetBkColor, SetBkMode, SetTextColor,
+        CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DRAW_TEXT_FORMAT, DT_CENTER,
+        DT_LEFT, DT_NOPREFIX, DT_RIGHT, DT_SINGLELINE, DT_VCENTER, FW_BOLD, FW_NORMAL, HBRUSH,
+        HDC, HFONT, HPEN, OUT_DEFAULT_PRECIS, PAINTSTRUCT, PS_SOLID, SRCCOPY, TRANSPARENT,
+    };
+    pub use windows::Win32::UI::Controls::{DRAWITEMSTRUCT, ODS_DISABLED, ODS_SELECTED};
+    pub use windows::Win32::UI::Input::KeyboardAndMouse::{
+        EnableWindow, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT,
+    };
+    pub use windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
+    pub use windows::Win32::UI::WindowsAndMessaging::{
+        AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect,
+        GetWindowLongPtrW, IsWindow, KillTimer, LoadCursorW, MoveWindow, RegisterClassExW,
+        SendMessageW, SetCursor, SetTimer, SetWindowLongPtrW, SetWindowPos, SetWindowTextW,
+        ShowWindow, BN_CLICKED, BS_OWNERDRAW, CREATESTRUCTW, ES_AUTOVSCROLL, ES_MULTILINE,
+        ES_NOHIDESEL, ES_READONLY, GWLP_USERDATA, HMENU, HWND_TOPMOST, IDC_ARROW, IDC_HAND,
+        MINMAXINFO, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOW,
+        SW_SHOWNOACTIVATE, WINDOW_EX_STYLE, WM_COMMAND, WM_CTLCOLOREDIT, WM_CTLCOLORSTATIC,
+        WM_DESTROY, WM_DRAWITEM, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_KEYDOWN, WM_MOUSEMOVE,
+        WM_NCCREATE, WM_PAINT, WM_SETCURSOR, WM_SETFONT, WM_SIZE, WM_TIMER, WNDCLASSEXW,
+        WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_OVERLAPPED,
+        WS_SIZEBOX, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    };
+}
+#[cfg(target_os = "windows")]
+use win_imports::*;
+
+#[cfg(target_os = "windows")]
 const ID_COPY: usize = 1;
+#[cfg(target_os = "windows")]
 const ID_CLOSE: usize = 2;
+#[cfg(target_os = "windows")]
 const ID_RETRY: usize = 3;
+#[cfg(target_os = "windows")]
 const EM_SETSEL: u32 = 0x00B1;
+#[cfg(target_os = "windows")]
 const WM_MOUSELEAVE: u32 = 0x02A3;
+#[cfg(target_os = "windows")]
 const TIMER_ANIMATION: usize = 1;
+#[cfg(target_os = "windows")]
 const TIMER_COPY_FEEDBACK: usize = 2;
+#[cfg(target_os = "windows")]
 pub const WM_AI_RETRY: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -54,6 +71,7 @@ pub enum SourceView {
     Image(Arc<Bitmap>),
 }
 
+#[cfg(target_os = "windows")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ViewState {
     Loading,
@@ -62,6 +80,7 @@ enum ViewState {
 }
 
 #[derive(Clone, Copy, Debug)]
+#[allow(dead_code)]
 struct TranslationLayout {
     header: Rect,
     source_card: Rect,
@@ -74,6 +93,7 @@ struct TranslationLayout {
     close_btn: Rect,
 }
 
+#[cfg(target_os = "windows")]
 struct TranslationWindow {
     source_text: String,
     translated_text: String,
@@ -105,16 +125,20 @@ struct TranslationWindow {
     copied: bool,
 }
 
+#[cfg(target_os = "windows")]
 static CURRENT: AtomicPtr<core::ffi::c_void> = AtomicPtr::new(std::ptr::null_mut());
 
+#[cfg(target_os = "windows")]
 fn current() -> HWND {
     HWND(CURRENT.load(Ordering::SeqCst))
 }
 
+#[cfg(target_os = "windows")]
 fn set_current(hwnd: HWND) {
     CURRENT.store(hwnd.0, Ordering::SeqCst);
 }
 
+#[cfg(target_os = "windows")]
 pub fn show_loading(kind: AiKind, source: SourceView, request_id: u64, host: HWND) {
     unsafe {
         let (source_text, source_image) = match source {
@@ -278,6 +302,7 @@ pub fn show_loading(kind: AiKind, source: SourceView, request_id: u64, host: HWN
     }
 }
 
+#[cfg(target_os = "windows")]
 pub fn show_success(request_id: u64, text: &str) -> bool {
     unsafe {
         let hwnd = current();
@@ -303,6 +328,7 @@ pub fn show_success(request_id: u64, text: &str) -> bool {
     }
 }
 
+#[cfg(target_os = "windows")]
 pub fn show_error(request_id: u64, error: &str) -> bool {
     unsafe {
         let hwnd = current();
@@ -324,6 +350,7 @@ pub fn show_error(request_id: u64, error: &str) -> bool {
     }
 }
 
+#[cfg(target_os = "windows")]
 pub fn bring_to_front() {
     unsafe {
         let hwnd = current();
@@ -342,6 +369,7 @@ pub fn bring_to_front() {
     }
 }
 
+#[cfg(target_os = "windows")]
 unsafe fn update_title(hwnd: HWND, kind: AiKind) {
     let title = match kind {
         AiKind::Ocr => "TermShot — 文字识别",
@@ -352,6 +380,7 @@ unsafe fn update_title(hwnd: HWND, kind: AiKind) {
     let _ = SetWindowTextW(hwnd, windows::core::PCWSTR(value.as_ptr()));
 }
 
+#[cfg(target_os = "windows")]
 unsafe fn update_controls(state: &TranslationWindow) {
     let is_text_source = state.source_image.is_none();
     let _ = ShowWindow(state.source_edit, if is_text_source { SW_SHOW } else { SW_HIDE });
@@ -365,6 +394,7 @@ unsafe fn update_controls(state: &TranslationWindow) {
     let _ = SetWindowTextW(state.copy_btn, windows::core::PCWSTR(copy_label.as_ptr()));
 }
 
+#[cfg(target_os = "windows")]
 pub fn close() {
     unsafe {
         let hwnd = current();
@@ -374,6 +404,7 @@ pub fn close() {
     }
 }
 
+#[cfg(target_os = "windows")]
 fn make_font(px: i32, bold: bool) -> HFONT {
     unsafe {
         CreateFontW(
@@ -399,6 +430,7 @@ fn make_font(px: i32, bold: bool) -> HFONT {
     }
 }
 
+#[cfg(target_os = "windows")]
 unsafe fn build_controls(hwnd: HWND) {
     let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut TranslationWindow;
     if ptr.is_null() {
@@ -415,6 +447,7 @@ unsafe fn build_controls(hwnd: HWND) {
     let _ = SendMessageW(state.translated_edit, EM_SETSEL, WPARAM(0), LPARAM(0));
 }
 
+#[cfg(target_os = "windows")]
 unsafe fn create_text_box(parent: HWND, text: &str, font: HFONT) -> HWND {
     let value = wide(text);
     let hwnd = CreateWindowExW(
@@ -446,6 +479,7 @@ unsafe fn create_text_box(parent: HWND, text: &str, font: HFONT) -> HWND {
     hwnd
 }
 
+#[cfg(target_os = "windows")]
 unsafe fn create_button(parent: HWND, text: &str, id: usize, font: HFONT) -> HWND {
     let value = wide(text);
     let hwnd = CreateWindowExW(
@@ -471,6 +505,7 @@ unsafe fn create_button(parent: HWND, text: &str, id: usize, font: HFONT) -> HWN
     hwnd
 }
 
+#[allow(dead_code)]
 fn compute_layout(width: i32, height: i32, scale: f32) -> TranslationLayout {
     let p = |v: i32| sc(v, scale);
     let margin = p(16);
@@ -524,6 +559,7 @@ fn compute_layout(width: i32, height: i32, scale: f32) -> TranslationLayout {
     }
 }
 
+#[cfg(target_os = "windows")]
 unsafe fn layout(hwnd: HWND) {
     let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut TranslationWindow;
     if ptr.is_null() {
@@ -541,10 +577,12 @@ unsafe fn layout(hwnd: HWND) {
     let _ = InvalidateRect(hwnd, None, false);
 }
 
+#[cfg(target_os = "windows")]
 unsafe fn move_control(hwnd: HWND, rect: Rect) {
     let _ = MoveWindow(hwnd, rect.x, rect.y, rect.w, rect.h, true);
 }
 
+#[cfg(target_os = "windows")]
 unsafe fn paint_window(state: &TranslationWindow, hdc: HDC, width: i32, height: i32) {
     let layout = compute_layout(width, height, state.scale);
     let full = RECT {
@@ -661,6 +699,13 @@ unsafe fn paint_window(state: &TranslationWindow, hdc: HDC, width: i32, height: 
     );
 }
 
+#[cfg(target_os = "macos")]
+#[allow(unused_imports)]
+pub use crate::macos::translation_window::{
+    bring_to_front, close, show_error, show_loading, show_success,
+};
+
+#[cfg(target_os = "windows")]
 unsafe fn draw_status_badge(state: &TranslationWindow, hdc: HDC, width: i32) {
     let badge = Rect::new(
         width - sc(100, state.scale),
@@ -701,6 +746,7 @@ unsafe fn draw_status_badge(state: &TranslationWindow, hdc: HDC, width: i32) {
     );
 }
 
+#[cfg(target_os = "windows")]
 unsafe fn paint_image_preview(hdc: HDC, image: &Bitmap, area: Rect) {
     if image.width <= 0 || image.height <= 0 || area.w <= 2 || area.h <= 2 {
         return;
@@ -719,6 +765,7 @@ unsafe fn paint_image_preview(hdc: HDC, image: &Bitmap, area: Rect) {
     image.blit_to_hdc(hdc, dest);
 }
 
+#[cfg(target_os = "windows")]
 unsafe fn paint_loading(state: &TranslationWindow, hdc: HDC, area: Rect) {
     let bright = state.pulse < 10;
     let color = if bright { theme::HOVER_BG } else { theme::BORDER };
@@ -752,6 +799,7 @@ unsafe fn paint_loading(state: &TranslationWindow, hdc: HDC, area: Rect) {
     );
 }
 
+#[cfg(target_os = "windows")]
 unsafe fn paint_error(state: &TranslationWindow, hdc: HDC, area: Rect) {
     draw_text(
         hdc,
@@ -781,6 +829,7 @@ unsafe fn paint_error(state: &TranslationWindow, hdc: HDC, area: Rect) {
     );
 }
 
+#[cfg(target_os = "windows")]
 unsafe fn draw_card(state: &TranslationWindow, hdc: HDC, rect: Rect, accented: bool) {
     let old_brush = SelectObject(hdc, state.panel_brush);
     let old_pen = SelectObject(hdc, state.border_pen);
@@ -812,6 +861,7 @@ unsafe fn draw_card(state: &TranslationWindow, hdc: HDC, rect: Rect, accented: b
     }
 }
 
+#[cfg(target_os = "windows")]
 unsafe fn draw_card_header(
     state: &TranslationWindow,
     hdc: HDC,
@@ -859,6 +909,7 @@ unsafe fn draw_card_header(
     );
 }
 
+#[cfg(target_os = "windows")]
 unsafe fn draw_text(
     hdc: HDC,
     text: &str,
@@ -875,11 +926,13 @@ unsafe fn draw_text(
     SelectObject(hdc, old_font);
 }
 
+#[cfg(target_os = "windows")]
 unsafe fn fill_color_rect(hdc: HDC, rect: Rect, brush: HBRUSH) {
     let win = rect_to_win(rect);
     let _ = FillRect(hdc, &win, brush);
 }
 
+#[cfg(target_os = "windows")]
 fn rect_to_win(rect: Rect) -> RECT {
     RECT {
         left: rect.x,
@@ -889,6 +942,7 @@ fn rect_to_win(rect: Rect) -> RECT {
     }
 }
 
+#[cfg(target_os = "windows")]
 unsafe fn draw_owner_button(state: &TranslationWindow, dis: &DRAWITEMSTRUCT) {
     let rc = dis.rcItem;
     let primary = dis.CtlID == ID_COPY as u32 || dis.CtlID == ID_RETRY as u32;
@@ -962,6 +1016,7 @@ unsafe fn draw_owner_button(state: &TranslationWindow, dis: &DRAWITEMSTRUCT) {
     );
 }
 
+#[cfg(target_os = "windows")]
 unsafe extern "system" fn button_subclass_proc(
     hwnd: HWND,
     msg: u32,
@@ -1007,6 +1062,7 @@ unsafe extern "system" fn button_subclass_proc(
     DefSubclassProc(hwnd, msg, wparam, lparam)
 }
 
+#[cfg(target_os = "windows")]
 unsafe extern "system" fn text_subclass_proc(
     hwnd: HWND,
     msg: u32,
@@ -1032,6 +1088,7 @@ unsafe extern "system" fn text_subclass_proc(
     DefSubclassProc(hwnd, msg, wparam, lparam)
 }
 
+#[cfg(target_os = "windows")]
 unsafe fn destroy_resources(state: &mut TranslationWindow) {
     for font in [
         state.font,
@@ -1063,6 +1120,7 @@ unsafe fn destroy_resources(state: &mut TranslationWindow) {
     }
 }
 
+#[cfg(target_os = "windows")]
 unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if msg == WM_NCCREATE {
         let create = &*(lparam.0 as *const CREATESTRUCTW);
@@ -1192,6 +1250,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
     }
 }
 
+#[cfg(target_os = "windows")]
 unsafe fn request_retry(state: &TranslationWindow) {
     if state.host == 0 {
         return;

@@ -1,3 +1,8 @@
+#[cfg(target_os = "macos")]
+pub use crate::macos::setup::run;
+
+#[cfg(target_os = "windows")]
+mod win_imp {
 #![allow(clippy::too_many_arguments)]
 use crate::geom::Color;
 use crate::native::{
@@ -766,3 +771,7 @@ fn draw_setup_button(scale: f32, dis: &DRAWITEMSTRUCT, font: HFONT, font_bold: H
         SelectObject(hdc, old_font);
     }
 }
+}
+
+#[cfg(target_os = "windows")]
+pub use win_imp::run;

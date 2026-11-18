@@ -2,7 +2,7 @@
 name = "termshot"
 version = "1.0.0"
 edition = "2021"
-description = "托盘常驻截图，框选存 PNG，路径写入剪贴板供终端粘贴"
+description = "托盘/菜单栏常驻截图，框选存 PNG，路径写入剪贴板供终端粘贴"
 authors = ["TermShot"]
 license = "MIT"
 
@@ -17,6 +17,8 @@ regex = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ureq = { version = "2.12", features = ["json"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
 winreg = "0.52"
 windows = { version = "0.58", features = [
     "Win32_Foundation",
@@ -42,7 +44,11 @@ windows = { version = "0.58", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+
 [build-dependencies]
+cc = "1"
 embed-resource = "2"
 
 [profile.release]

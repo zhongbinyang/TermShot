@@ -1,7 +1,10 @@
 use crate::bitmap::Bitmap;
 use crate::geom::{Color, Point};
+#[cfg(target_os = "windows")]
 use crate::util::wide;
+#[cfg(target_os = "windows")]
 use windows::Win32::Foundation::RECT;
+#[cfg(target_os = "windows")]
 use windows::Win32::Graphics::Gdi::{
     CreateCompatibleDC, CreateDIBSection, CreateFontW, DeleteDC, DeleteObject, DrawTextW, GetDC,
     GetTextExtentPoint32W, ReleaseDC, SelectObject, SetBkMode, SetTextColor, BITMAPINFO,
@@ -142,6 +145,7 @@ pub fn paint_arrow(bmp: &mut Bitmap, from: Point, to: Point, color: Color, width
     }
 }
 
+#[cfg(target_os = "windows")]
 pub fn draw_text(bmp: &mut Bitmap, at: Point, text: &str, color: Color, px: i32) {
     if text.trim().is_empty() {
         return;
@@ -233,6 +237,12 @@ pub fn draw_text(bmp: &mut Bitmap, at: Point, text: &str, color: Color, px: i32)
     }
 }
 
+#[cfg(target_os = "macos")]
+pub fn draw_text(bmp: &mut Bitmap, at: Point, text: &str, color: Color, px: i32) {
+    crate::macos::ffi::draw_text_to_bitmap(bmp, at, text, color, px, true);
+}
+
+#[cfg(target_os = "windows")]
 pub fn paint_arrow_hdc(
     hdc: windows::Win32::Graphics::Gdi::HDC,
     from: Point,
@@ -300,6 +310,7 @@ pub fn paint_arrow_hdc(
     }
 }
 
+#[cfg(target_os = "windows")]
 pub fn measure_text(text: &str, px: i32) -> (i32, i32) {
     if text.is_empty() {
         return (0, px);
@@ -333,6 +344,12 @@ pub fn measure_text(text: &str, px: i32) -> (i32, i32) {
     }
 }
 
+#[cfg(target_os = "macos")]
+pub fn measure_text(text: &str, px: i32) -> (i32, i32) {
+    crate::macos::ffi::measure_text(text, px, false)
+}
+
+#[cfg(target_os = "windows")]
 pub fn paint_chip_hdc(
     hdc: windows::Win32::Graphics::Gdi::HDC,
     r: crate::geom::Rect,
@@ -353,6 +370,7 @@ pub fn paint_chip_hdc(
     );
 }
 
+#[cfg(target_os = "windows")]
 pub fn draw_text_hdc(
     hdc: windows::Win32::Graphics::Gdi::HDC,
     at: Point,

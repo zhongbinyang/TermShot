@@ -1,3 +1,8 @@
+#[cfg(target_os = "macos")]
+pub use crate::macos::settings_ui::run;
+
+#[cfg(target_os = "windows")]
+mod win_imp {
 #![allow(clippy::too_many_arguments)]
 use crate::geom::Color;
 use crate::native::{
@@ -2127,3 +2132,7 @@ fn browse_folder(owner: HWND, initial: &str) -> Option<String> {
         s
     }
 }
+}
+
+#[cfg(target_os = "windows")]
+pub use win_imp::run;

@@ -3,7 +3,9 @@ use crate::geom::Color;
 use crate::theme;
 use std::io::Write;
 use std::path::Path;
+#[cfg(target_os = "windows")]
 use windows::Win32::Graphics::Gdi::{CreateBitmap, DeleteObject};
+#[cfg(target_os = "windows")]
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateIconIndirect, DestroyIcon, ICONINFO, HICON,
 };
@@ -181,11 +183,43 @@ pub fn write_ico(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+#[allow(dead_code)]
+pub fn write_icns(path: &Path) -> Result<(), String> {
+    if let Some(p) = path.parent() {
+        std::fs::create_dir_all(p).map_err(|e| e.to_string())?;
+    }
+    let entries: &[(i32, &[u8; 4])] = &[
+        (16, b"icp4"),
+        (32, b"icp5"),
+        (64, b"icp6"),
+        (128, b"ic07"),
+        (256, b"ic08"),
+        (512, b"ic09"),
+    ];
+    let mut body = Vec::new();
+    for &(size, tag) in entries {
+        let png = draw_app_bitmap(size).to_png_bytes()?;
+        let chunk_len = (8 + png.len()) as u32;
+        body.extend_from_slice(tag);
+        body.extend_from_slice(&chunk_len.to_be_bytes());
+        body.extend_from_slice(&png);
+    }
+    let total_len = (8 + body.len()) as u32;
+    let mut f = std::fs::File::create(path).map_err(|e| e.to_string())?;
+    f.write_all(b"icns").map_err(|e| e.to_string())?;
+    f.write_all(&total_len.to_be_bytes())
+        .map_err(|e| e.to_string())?;
+    f.write_all(&body).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
 pub fn create_hicon() -> Option<HICON> {
     let size = crate::native::small_icon_size();
     create_hicon_size(size)
 }
 
+#[cfg(target_os = "windows")]
 fn create_hicon_size(size: i32) -> Option<HICON> {
     let size = size.max(16);
     let bmp = draw_app_bitmap(size);
@@ -225,8 +259,26 @@ fn create_hicon_size(size: i32) -> Option<HICON> {
     }
 }
 
+#[cfg(target_os = "windows")]
 pub fn destroy_icon(icon: HICON) {
     unsafe {
         let _ = DestroyIcon(icon);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_write_icns_has_valid_header() {
+        let path = std::env::temp_dir().join(format!("termshot_test_{}.icns", std::process::id()));
+        write_icns(&path).expect("write icns");
+        let bytes = std::fs::read(&path).expect("read icns");
+        let _ = std::fs::remove_file(&path);
+        assert!(bytes.len() > 16);
+        assert_eq!(&bytes[..4], b"icns");
+        let declared_len = u32::from_be_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]) as usize;
+        assert_eq!(declared_len, bytes.len());
     }
 }

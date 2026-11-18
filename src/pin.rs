@@ -1,3 +1,8 @@
+#[cfg(target_os = "macos")]
+pub use crate::macos::pin::{close_all, count, open};
+
+#[cfg(target_os = "windows")]
+mod win_imp {
 use crate::bitmap::Bitmap;
 use crate::geom::{Color, Point, Rect};
 use crate::native::{cursor_hand, cursor_sizeall, dpi_scale_hwnd, fill_rect_hdc, hinstance, sc, stroke_rect_hdc, work_area_from_point};
@@ -471,3 +476,7 @@ fn lp(lparam: LPARAM) -> Point {
     let v = lparam.0 as u32;
     Point::new((v & 0xFFFF) as i16 as i32, ((v >> 16) & 0xFFFF) as i16 as i32)
 }
+}
+
+#[cfg(target_os = "windows")]
+pub use win_imp::{close_all, count, open};

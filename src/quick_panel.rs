@@ -1,29 +1,39 @@
-use crate::geom::{Color, Point, Rect};
-use crate::native::{cursor_pos, dpi_scale_at, hinstance, place_topmost, sc, work_area_from_point};
-use crate::theme;
-use crate::util::wide;
-use std::sync::atomic::{AtomicPtr, Ordering};
-use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
-use windows::Win32::Graphics::Gdi::{
-    BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW, CreatePen,
-    CreateRoundRectRgn, CreateSolidBrush, DeleteDC, DeleteObject, DrawTextW, EndPaint,
-    InvalidateRect, RoundRect, SelectObject, SetBkMode, SetTextColor, SetWindowRgn, CLEARTYPE_QUALITY,
-    CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DT_CENTER, DT_LEFT, DT_NOPREFIX, DT_SINGLELINE,
-    DT_VCENTER, FW_BOLD, FW_NORMAL, OUT_DEFAULT_PRECIS, PAINTSTRUCT, PS_SOLID, SRCCOPY,
-    TRANSPARENT,
-};
-use windows::Win32::UI::Input::KeyboardAndMouse::{
-    TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT, VK_DOWN, VK_ESCAPE, VK_RETURN, VK_SPACE, VK_TAB,
-    VK_UP,
-};
-use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindowLongPtrW, IsWindow, LoadCursorW,
-    PostMessageW, RegisterClassExW, SetCursor, SetForegroundWindow, SetWindowLongPtrW,
-    CS_DBLCLKS, GWLP_USERDATA, IDC_ARROW, IDC_HAND, WA_INACTIVE, WM_ACTIVATE,
-    WM_APP, WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_MOUSEMOVE, WM_NCCREATE,
-    WM_PAINT, WM_SETCURSOR, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
-};
+use crate::geom::{Point, Rect};
+use crate::native::sc;
 
+#[cfg(target_os = "windows")]
+mod win_imports {
+    pub use crate::geom::Color;
+    pub use crate::native::{cursor_pos, dpi_scale_at, hinstance, place_topmost, work_area_from_point};
+    pub use crate::theme;
+    pub use crate::util::wide;
+    pub use std::sync::atomic::{AtomicPtr, Ordering};
+    pub use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
+    pub use windows::Win32::Graphics::Gdi::{
+        BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW, CreatePen,
+        CreateRoundRectRgn, CreateSolidBrush, DeleteDC, DeleteObject, DrawTextW, EndPaint,
+        InvalidateRect, RoundRect, SelectObject, SetBkMode, SetTextColor, SetWindowRgn,
+        CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DT_CENTER, DT_LEFT, DT_NOPREFIX,
+        DT_SINGLELINE, DT_VCENTER, FW_BOLD, FW_NORMAL, OUT_DEFAULT_PRECIS, PAINTSTRUCT, PS_SOLID,
+        SRCCOPY, TRANSPARENT,
+    };
+    pub use windows::Win32::UI::Input::KeyboardAndMouse::{
+        TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT, VK_DOWN, VK_ESCAPE, VK_RETURN, VK_SPACE,
+        VK_TAB, VK_UP,
+    };
+    pub use windows::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindowLongPtrW, IsWindow, LoadCursorW,
+        PostMessageW, RegisterClassExW, SetCursor, SetForegroundWindow, SetWindowLongPtrW,
+        CS_DBLCLKS, GWLP_USERDATA, IDC_ARROW, IDC_HAND, WA_INACTIVE, WM_ACTIVATE, WM_APP,
+        WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_MOUSEMOVE, WM_NCCREATE,
+        WM_PAINT, WM_SETCURSOR, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+        WS_VISIBLE,
+    };
+}
+#[cfg(target_os = "windows")]
+use win_imports::*;
+
+#[cfg(target_os = "windows")]
 pub const WM_QUICK_ACTION: u32 = WM_APP + 3;
 pub const ACTION_CAPTURE: usize = 1;
 pub const ACTION_TRANSLATE: usize = 2;
@@ -32,8 +42,9 @@ pub const ACTION_OPEN_DIR: usize = 4;
 pub const ACTION_SETTINGS: usize = 5;
 pub const ACTION_EXIT: usize = 6;
 
+#[cfg(target_os = "windows")]
 const WM_MOUSELEAVE: u32 = 0x02A3;
-const BUTTON_COUNT: usize = 6;
+pub(crate) const BUTTON_COUNT: usize = 6;
 
 #[derive(Clone)]
 pub struct Snapshot {
@@ -44,27 +55,32 @@ pub struct Snapshot {
     pub pin_count: usize,
 }
 
-struct QuickPanel {
-    host: isize,
-    snapshot: Snapshot,
-    scale: f32,
-    width: i32,
-    height: i32,
-    buttons: [Rect; BUTTON_COUNT],
-    hover: i32,
-    focus: i32,
+pub(crate) struct QuickPanel {
+    #[allow(dead_code)]
+    pub(crate) host: isize,
+    pub(crate) snapshot: Snapshot,
+    pub(crate) scale: f32,
+    pub(crate) width: i32,
+    pub(crate) height: i32,
+    pub(crate) buttons: [Rect; BUTTON_COUNT],
+    pub(crate) hover: i32,
+    pub(crate) focus: i32,
 }
 
+#[cfg(target_os = "windows")]
 static CURRENT: AtomicPtr<core::ffi::c_void> = AtomicPtr::new(std::ptr::null_mut());
 
+#[cfg(target_os = "windows")]
 fn current() -> HWND {
     HWND(CURRENT.load(Ordering::SeqCst))
 }
 
+#[cfg(target_os = "windows")]
 fn set_current(hwnd: HWND) {
     CURRENT.store(hwnd.0, Ordering::SeqCst);
 }
 
+#[cfg(target_os = "windows")]
 pub fn close() {
     unsafe {
         let hwnd = current();
@@ -73,7 +89,12 @@ pub fn close() {
         }
     }
 }
+#[cfg(target_os = "macos")]
+pub fn close() {
+    crate::macos::quick_panel::close();
+}
 
+#[cfg(target_os = "windows")]
 pub fn toggle(host: HWND, snapshot: Snapshot) {
     unsafe {
         let existing = current();
@@ -148,7 +169,7 @@ pub fn toggle(host: HWND, snapshot: Snapshot) {
 }
 
 impl QuickPanel {
-    fn layout(&mut self) {
+    pub(crate) fn layout(&mut self) {
         let p = |v| sc(v, self.scale);
         self.buttons[0] = Rect::new(p(18), p(92), self.width - p(36), p(50));
         self.buttons[1] = Rect::new(p(18), p(150), self.width - p(36), p(50));
@@ -158,15 +179,15 @@ impl QuickPanel {
         self.buttons[5] = Rect::new(p(238), p(352), p(100), p(42));
     }
 
-    fn hit(&self, point: Point) -> i32 {
+    pub(crate) fn hit(&self, point: Point) -> i32 {
         self.buttons
             .iter()
-            .position(|r| r.contains(point))
+            .position(|r| r.contains(p_or_pt(point)))
             .map(|i| i as i32)
             .unwrap_or(-1)
     }
 
-    fn action(index: i32) -> usize {
+    pub(crate) fn action(index: i32) -> usize {
         match index {
             0 => ACTION_CAPTURE,
             1 => ACTION_TRANSLATE,
@@ -178,6 +199,7 @@ impl QuickPanel {
         }
     }
 
+    #[cfg(target_os = "windows")]
     fn activate(&self, index: i32) {
         let action = Self::action(index);
         if action == 0 || (action == ACTION_CLOSE_PINS && self.snapshot.pin_count == 0) {
@@ -190,6 +212,12 @@ impl QuickPanel {
     }
 }
 
+#[inline]
+fn p_or_pt(point: Point) -> Point {
+    point
+}
+
+#[cfg(target_os = "windows")]
 unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if msg == WM_NCCREATE {
         let cs = &*(lparam.0 as *const windows::Win32::UI::WindowsAndMessaging::CREATESTRUCTW);
@@ -279,6 +307,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
     }
 }
 
+#[cfg(target_os = "windows")]
 unsafe fn paint(hwnd: HWND, panel: &QuickPanel) {
     let mut ps = PAINTSTRUCT::default();
     let hdc = BeginPaint(hwnd, &mut ps);
@@ -361,6 +390,7 @@ unsafe fn paint(hwnd: HWND, panel: &QuickPanel) {
     let _ = EndPaint(hwnd, &ps);
 }
 
+#[cfg(target_os = "windows")]
 unsafe fn button(
     hdc: windows::Win32::Graphics::Gdi::HDC,
     panel: &QuickPanel,
@@ -393,6 +423,7 @@ unsafe fn button(
     text(hdc, shortcut, Rect::new(rect.x + rect.w / 2, rect.y, rect.w / 2 - sc(16, panel.scale), rect.h), sc(10, panel.scale), false, if primary { fg } else { theme::DIM }, windows::Win32::Graphics::Gdi::DT_RIGHT);
 }
 
+#[cfg(target_os = "windows")]
 unsafe fn small_button(hdc: windows::Win32::Graphics::Gdi::HDC, panel: &QuickPanel, index: usize, label: &str) {
     let rect = panel.buttons[index];
     let active = panel.hover == index as i32 || panel.focus == index as i32;
@@ -400,6 +431,7 @@ unsafe fn small_button(hdc: windows::Win32::Graphics::Gdi::HDC, panel: &QuickPan
     text(hdc, label, rect, sc(11, panel.scale), false, if active { theme::ACCENT_HI } else { theme::TEXT }, DT_CENTER);
 }
 
+#[cfg(target_os = "windows")]
 unsafe fn card(hdc: windows::Win32::Graphics::Gdi::HDC, rect: Rect, bg: Color, stroke: Color, radius: i32) {
     let brush = CreateSolidBrush(COLORREF(bg.colorref()));
     let pen = CreatePen(PS_SOLID, 1, COLORREF(stroke.colorref()));
@@ -412,6 +444,7 @@ unsafe fn card(hdc: windows::Win32::Graphics::Gdi::HDC, rect: Rect, bg: Color, s
     let _ = DeleteObject(pen);
 }
 
+#[cfg(target_os = "windows")]
 unsafe fn text(
     hdc: windows::Win32::Graphics::Gdi::HDC,
     value: &str,
@@ -452,6 +485,7 @@ unsafe fn text(
     let _ = DeleteObject(font);
 }
 
+#[cfg(target_os = "windows")]
 fn lp(lparam: LPARAM) -> Point {
     let raw = lparam.0 as u32;
     Point::new((raw & 0xFFFF) as i16 as i32, ((raw >> 16) & 0xFFFF) as i16 as i32)

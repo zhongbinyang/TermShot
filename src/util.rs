@@ -1,9 +1,11 @@
+#[cfg(target_os = "windows")]
 use windows::core::PCWSTR;
 
 pub fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
+#[cfg(target_os = "windows")]
 #[allow(dead_code)]
 pub fn pcw(v: &[u16]) -> PCWSTR {
     PCWSTR(v.as_ptr())
@@ -23,28 +25,73 @@ pub fn exe_path() -> std::io::Result<std::path::PathBuf> {
 }
 
 pub fn local_app_data() -> std::path::PathBuf {
-    if let Ok(p) = std::env::var("LOCALAPPDATA") {
-        return std::path::PathBuf::from(p);
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(p) = std::env::var("LOCALAPPDATA") {
+            return std::path::PathBuf::from(p);
+        }
+        return std::path::PathBuf::from(".");
     }
-    std::path::PathBuf::from(".")
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(home) = std::env::var("HOME") {
+            return std::path::PathBuf::from(home)
+                .join("Library")
+                .join("Application Support");
+        }
+        return std::path::PathBuf::from(".");
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        std::path::PathBuf::from(".")
+    }
 }
 
 pub fn pictures_dir() -> std::path::PathBuf {
-    if let Ok(p) = std::env::var("USERPROFILE") {
-        return std::path::PathBuf::from(p).join("Pictures");
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(p) = std::env::var("USERPROFILE") {
+            return std::path::PathBuf::from(p).join("Pictures");
+        }
+        return local_app_data();
     }
-    local_app_data()
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(home) = std::env::var("HOME") {
+            return std::path::PathBuf::from(home).join("Pictures");
+        }
+        return local_app_data();
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        local_app_data()
+    }
 }
 
+#[allow(dead_code)]
 pub fn start_menu_programs() -> std::path::PathBuf {
-    if let Ok(p) = std::env::var("APPDATA") {
-        return std::path::PathBuf::from(p)
-            .join("Microsoft")
-            .join("Windows")
-            .join("Start Menu")
-            .join("Programs");
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(p) = std::env::var("APPDATA") {
+            return std::path::PathBuf::from(p)
+                .join("Microsoft")
+                .join("Windows")
+                .join("Start Menu")
+                .join("Programs");
+        }
+        return local_app_data();
     }
-    local_app_data()
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(home) = std::env::var("HOME") {
+            return std::path::PathBuf::from(home).join("Applications");
+        }
+        return local_app_data();
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        local_app_data()
+    }
 }
 
 #[cfg(test)]

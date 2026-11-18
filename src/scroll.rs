@@ -1,28 +1,34 @@
 use crate::bitmap::Bitmap;
-use crate::geom::{Color, Point, Rect};
-use crate::native::{
-    dpi_scale_at, dpi_scale_hwnd, fill_rect_hdc, hinstance, key_down, place_topmost, sc,
-    stroke_rect_hdc, virtual_screen,
-};
-use crate::theme;
-use crate::util::wide;
-use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
-use windows::Win32::Graphics::Gdi::{
-    BeginPaint, BitBlt, CombineRgn, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW,
-    CreatePen, CreateRectRgn, CreateSolidBrush, DeleteDC, DeleteObject, DrawTextW, EndPaint,
-    InvalidateRect, RoundRect, SelectObject, SetBkMode, SetTextColor, SetWindowRgn,
-    CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DT_CENTER, DT_LEFT, DT_NOPREFIX,
-    DT_SINGLELINE, DT_VCENTER, FW_BOLD, FW_NORMAL, OUT_DEFAULT_PRECIS, PAINTSTRUCT, PS_SOLID,
-    RGN_OR, SRCCOPY, TRANSPARENT,
-};
-use windows::Win32::UI::Input::KeyboardAndMouse::{VK_ESCAPE, VK_RETURN};
-use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect, GetWindowLongPtrW,
-    LoadCursorW, PeekMessageW, RegisterClassExW, SetCursor, SetWindowLongPtrW, TranslateMessage,
-    CS_DBLCLKS, GWLP_USERDATA, IDC_HAND, MSG, PM_REMOVE, WM_DESTROY, WM_LBUTTONDOWN, WM_MOUSEMOVE,
-    WM_PAINT, WM_RBUTTONDOWN, WM_SETCURSOR, WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-    WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
-};
+
+#[cfg(target_os = "windows")]
+mod win_imports {
+    pub use crate::geom::{Color, Point, Rect};
+    pub use crate::native::{
+        dpi_scale_at, dpi_scale_hwnd, fill_rect_hdc, hinstance, key_down, place_topmost, sc,
+        stroke_rect_hdc, virtual_screen,
+    };
+    pub use crate::theme;
+    pub use crate::util::wide;
+    pub use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
+    pub use windows::Win32::Graphics::Gdi::{
+        BeginPaint, BitBlt, CombineRgn, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW,
+        CreatePen, CreateRectRgn, CreateSolidBrush, DeleteDC, DeleteObject, DrawTextW, EndPaint,
+        InvalidateRect, RoundRect, SelectObject, SetBkMode, SetTextColor, SetWindowRgn,
+        CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DT_CENTER, DT_LEFT, DT_NOPREFIX,
+        DT_SINGLELINE, DT_VCENTER, FW_BOLD, FW_NORMAL, OUT_DEFAULT_PRECIS, PAINTSTRUCT, PS_SOLID,
+        RGN_OR, SRCCOPY, TRANSPARENT,
+    };
+    pub use windows::Win32::UI::Input::KeyboardAndMouse::{VK_ESCAPE, VK_RETURN};
+    pub use windows::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect,
+        GetWindowLongPtrW, LoadCursorW, PeekMessageW, RegisterClassExW, SetCursor,
+        SetWindowLongPtrW, TranslateMessage, CS_DBLCLKS, GWLP_USERDATA, IDC_HAND, MSG, PM_REMOVE,
+        WM_DESTROY, WM_LBUTTONDOWN, WM_MOUSEMOVE, WM_PAINT, WM_RBUTTONDOWN, WM_SETCURSOR,
+        WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
+    };
+}
+#[cfg(target_os = "windows")]
+use win_imports::*;
 
 pub const MAX_HEIGHT: i32 = 32000;
 
@@ -31,6 +37,7 @@ pub enum HudDecision {
     Cancel,
 }
 
+#[cfg(target_os = "windows")]
 struct Hud {
     region: Rect,
     vs: Rect,
@@ -44,6 +51,12 @@ struct Hud {
     decision: Option<HudDecision>,
 }
 
+#[cfg(target_os = "macos")]
+pub fn run_scroll(region: crate::geom::Rect) -> Option<Bitmap> {
+    crate::macos::scroll::run_scroll(region)
+}
+
+#[cfg(target_os = "windows")]
 pub fn run_scroll(region: Rect) -> Option<Bitmap> {
     let vs = virtual_screen();
     let region = region.intersect(vs);
@@ -161,6 +174,7 @@ pub fn run_scroll(region: Rect) -> Option<Bitmap> {
     }
 }
 
+#[cfg(target_os = "windows")]
 fn pump() {
     unsafe {
         let mut msg = MSG::default();
@@ -171,6 +185,7 @@ fn pump() {
     }
 }
 
+#[cfg(target_os = "windows")]
 unsafe extern "system" fn hud_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if msg == windows::Win32::UI::WindowsAndMessaging::WM_NCCREATE {
         let cs = &*(lparam.0 as *const windows::Win32::UI::WindowsAndMessaging::CREATESTRUCTW);
@@ -410,11 +425,13 @@ unsafe extern "system" fn hud_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
     }
 }
 
+#[cfg(target_os = "windows")]
 fn lp(lparam: LPARAM) -> Point {
     let v = lparam.0 as u32;
     Point::new((v & 0xFFFF) as i16 as i32, ((v >> 16) & 0xFFFF) as i16 as i32)
 }
 
+#[cfg(target_os = "windows")]
 impl Hud {
     fn layout(&mut self, hwnd: HWND) {
         let mut rc = RECT::default();

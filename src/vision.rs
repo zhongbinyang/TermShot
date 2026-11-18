@@ -108,9 +108,13 @@ pub fn test_connection(settings: &Settings) -> Result<(), String> {
     if key.is_empty() {
         return Err("请先填写 DeepSeek API Key".into());
     }
-    let response = match ureq::get(MODELS_URL)
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(std::time::Duration::from_secs(8))
+        .timeout(std::time::Duration::from_secs(15))
+        .build();
+    let response = match agent
+        .get(MODELS_URL)
         .set("Authorization", &format!("Bearer {key}"))
-        .timeout(std::time::Duration::from_secs(20))
         .call()
     {
         Ok(response) => response,
@@ -266,7 +270,14 @@ fn clean_text(raw: &str, json_keys: &[&str]) -> Option<String> {
     static NL: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
     let nl = NL.get_or_init(|| Regex::new(r"\n{3,}").unwrap());
     text = nl.replace_all(&text, "\n\n").to_string();
-    text = text.replace('\n', "\r\n").trim().to_string();
+    #[cfg(target_os = "windows")]
+    {
+        text = text.replace('\n', "\r\n").trim().to_string();
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        text = text.trim().to_string();
+    }
     if text.is_empty() {
         None
     } else {
